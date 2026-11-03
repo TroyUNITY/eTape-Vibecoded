@@ -1,0 +1,58 @@
+name: Windows Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Build Windows executable
+        run: |
+          set -euo pipefail
+          version="dev-${GITHUB_SHA::7}"
+          make -C engine VERSION="$version" release-windows
+
+      - name: Package Windows download
+        run: |
+          set -euo pipefail
+          version="dev-${GITHUB_SHA::7}"
+          mkdir -p staging
+          cp dist/etape-windows-amd64.exe staging/etape.exe
+          cp README-FIRST.txt LICENSE staging/
+          (cd staging && zip -r "../eTape-${version}-windows-amd64.zip" .)
+          sha256sum "eTape-${version}-windows-amd64.zip" > "eTape-${version}-windows-amd64.zip.sha256"
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: eTape-windows-${{ github.sha }}
+          path: |
+            eTape-*-windows-amd64.zip
+            eTape-*-windows-amd64.zip.sha256
+          retention-days: 30
