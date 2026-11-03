@@ -1,6 +1,13 @@
 name: Windows Build
 
 on:
+  push:
+    branches:
+      - filtered-development
+    paths:
+      - "engine/**"
+      - "ui/**"
+      - "build-filtered-windows.ps1"
   workflow_dispatch:
 
 permissions:
