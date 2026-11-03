@@ -179,6 +179,8 @@ export interface Bar {
   inProgress: boolean;
   gap?: boolean;
   volumeOnly?: boolean;
+  source?: string;
+  coverageComplete?: boolean;
 }
 export interface IndicatorPoint {
   timeMs: number /* int64 */;
@@ -915,6 +917,43 @@ export interface QueryChartWindowResult {
   bars: Bar[];
   indicators: IndicatorSeriesWindow[];
   historyRevision: number /* int64 */;
+}
+export interface QueryFilteredChartWindowArgs {
+  symbol: string;
+  timeframe: string;
+  fromMs: number /* int64 */;
+  toMs: number /* int64 */;
+  anchorPrice?: number /* float64 */;
+  anchorTimeMs?: number /* int64 */;
+  localOnly?: boolean;
+}
+export interface FilteredChartDiagnostics {
+  alpacaFeed?: string;
+  alpacaInputReports: number /* int64 */;
+  localInputReports: number /* int64 */;
+  selectedAlpacaReports: number /* int64 */;
+  selectedLocalReports: number /* int64 */;
+  coverageMinutes: number /* int */;
+  completeAlpacaMinutes: number /* int */;
+  tickStoreMinutes: number /* int */;
+  partialAlpacaMinutes: number /* int */;
+  emptyMinutes: number /* int */;
+  localCoverageUnproven: boolean;
+  localCoverageReasons: string[];
+  alpacaRecencyClamped: boolean;
+  alpacaLatencyRuleUnavailable: boolean;
+  alpacaUnsupportedFeed: boolean;
+  potentialCrossFeedHits: number /* int */;
+  errors: string[];
+}
+export interface QueryFilteredChartWindowResult {
+  symbol: string;
+  timeframe: string;
+  fromMs: number /* int64 */;
+  toMs: number /* int64 */;
+  bars: Bar[];
+  diagnostics: FilteredChartDiagnostics;
+  error?: string;
 }
 export interface QueryVolumeProfileArgs {
   symbol: string;

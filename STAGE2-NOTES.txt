@@ -1,0 +1,95 @@
+eTape — Stage 2: Filtered Candle Reconstruction
+================================================
+
+What changed
+------------
+Stage 2 adds a backend-only filtered-candle reconstruction package at
+engine/internal/hist/filteredbars. It consumes the independent history streams
+from Stage 1 and produces 1-minute candles plus 5-minute candles folded from
+the selected 1-minute bars.
+
+It does NOT replace Moomoo's official K-lines, alter the chart UI, change Level
+2 visualizations, change orders/execution, or start using filtered candles in
+the chart. Those are Stage 3 tasks. The existing executable in the source tree
+was not rebuilt.
+
+Filtering implemented
+---------------------
+- Minimum price-forming trade size defaults to 100 shares.
+- Small reports can still contribute volume when their provider condition says
+  volume is eligible.
+- OpenD local reports received 20 seconds or more after their exchange time do
+  not move OHLC; condition-eligible volume is retained.
+- Alpaca reports use the tape-specific SIP minute-bar condition table. For
+  multiple flags, the strictest condition wins; unknown condition/tape values
+  fail closed.
+- Alpaca's optional `u` update field is preserved. `canceled` and `incorrect`
+  reports are excluded; `corrected` reports are evaluated. Unknown update
+  values fail closed.
+- 5-minute candles are folded from the selected 1-minute candles, not rebuilt
+  independently from raw reports.
+- Volume-only minutes need a previous trusted price/optional anchor. Without
+  one, the candle is suppressed instead of fabricating OHLC.
+
+Source selection / accuracy caveats
+-----------------------------------
+- Alpaca SIP is used exclusively for a minute only if the successful query
+  fully covers the whole minute. Otherwise TickStore is preferred when it has
+  prints; partial Alpaca rows are a last-resort source for minutes with no
+  local prints. Providers are never concatenated in a minute because their
+  report identities and timestamp precision are not interchangeable.
+- TickStore continuity is not proven. A local minute can contain only part of
+  the day's prints; coverage is therefore marked unproven, and missing gaps
+  are not filled with Moomoo K-lines or synthetic data.
+- Alpaca historical trade reports do not expose a provider-receipt timestamp,
+  so its records cannot be filtered by the 20-second latency rule. This is
+  reported in diagnostics.
+- Range-scoped TickStore reads cannot prove that a prior-reference-price report
+  is the first qualifying report of the business day. That condition's
+  first-of-day-only LastEligible flag is therefore suppressed in historical
+  reconstruction and counted in diagnostics.
+- ADF exclusion is not implemented. OpenD's normalized TickStore record does
+  not currently preserve exchange/venue, so applying the rule only to Alpaca
+  would make filtering provider-dependent. This is not an exact reproduction
+  of Warrior Trading / Day Trade Dash rules.
+- Alpaca tape `N` (Overnight) is not covered by the SIP condition table and is
+  therefore fail-closed rather than guessed.
+
+Files changed
+-------------
+- engine/internal/hist/filteredbars/filteredbars.go (new)
+- engine/internal/hist/filteredbars/filteredbars_test.go (new)
+- engine/internal/hist/filteredbars/README.md (new)
+- engine/internal/hist/alpaca/trades.go (preserves Alpaca `u` update marker)
+- engine/internal/hist/alpaca/trades_test.go
+- engine/internal/hist/tradehistory/history.go (trade-update-aware identity)
+- engine/internal/hist/tradehistory/history_test.go
+- engine/internal/md/eligibility.go (replay raw OpenD eligibility for history)
+- engine/internal/md/eligibility_test.go
+
+Validation
+----------
+- gofmt check: passed (no formatting diff).
+- A focused isolated Go harness using local stubs for the dependent package
+  types passed:
+    GOTOOLCHAIN=local go test ./internal/hist/filteredbars ./internal/md -count=1
+  This validates the new filteredbars tests and the historical eligibility
+  replay tests, but it is NOT a full test of the real eTape module graph.
+- The complete repository tests could not be run in this environment because
+  it has Go 1.23.2 while engine/go.mod requires Go 1.26.5; the required module
+  dependencies/toolchain could not be downloaded in this network-restricted
+  environment.
+
+Please run from the engine directory using your Go 1.26.5 installation:
+
+  go test ./internal/hist/filteredbars ./internal/hist/alpaca ./internal/hist/tradehistory ./internal/md -count=1
+
+If that passes, Stage 2's backend package tests are validated on the real
+project dependencies. Stage 3 can then wire this optional result into the
+chart with an explicit coverage/source indicator, while preserving the
+existing Moomoo K-line mode.
+
+Reference rules: Alpaca's official stock minute-bar update table and historical
+trades response fields are documented at:
+https://docs.alpaca.markets/us/docs/market-data-faq
+https://docs.alpaca.markets/us/reference/stocktradesingle-1

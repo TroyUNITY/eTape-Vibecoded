@@ -11,6 +11,7 @@ import (
 	"github.com/earlisreal/eTape/engine/internal/buildinfo"
 	"github.com/earlisreal/eTape/engine/internal/clock"
 	"github.com/earlisreal/eTape/engine/internal/exec"
+	"github.com/earlisreal/eTape/engine/internal/hist/tradehistory"
 	"github.com/earlisreal/eTape/engine/internal/locates"
 	"github.com/earlisreal/eTape/engine/internal/session"
 	"github.com/earlisreal/eTape/engine/internal/tickstore"
@@ -36,11 +37,15 @@ type queries struct {
 	charts interface {
 		QueryChartWindow(wsmsg.QueryChartWindowArgs) wsmsg.QueryChartWindowResult
 	}
-	clk           clock.Clock
-	locates       LocateRegistry
-	preview       eligiblePrintPreviewer
-	profileReader *tickstore.ProfileReader
-	profileSlots  chan struct{}
+	clk             clock.Clock
+	locates         LocateRegistry
+	preview         eligiblePrintPreviewer
+	profileReader   *tickstore.ProfileReader
+	profileSlots    chan struct{}
+	filteredHistory interface {
+		Fetch(context.Context, string, time.Time, time.Time) (tradehistory.Result, error)
+		FetchLocal(context.Context, string, time.Time, time.Time) (tradehistory.Result, error)
+	}
 
 	eligibility         EligibilityRegistry
 	eligibilityMu       sync.Mutex
@@ -96,7 +101,7 @@ func (q *queries) handleAsync(ctx context.Context, name string, args json.RawMes
 
 func isAsyncQuery(name string) bool {
 	switch name {
-	case "QueryVolumeProfile", "QueryStopLimitRoute", "QueryVenueInstrumentEligibility", "QueryLocateEligibility", "QueryLocateQuotes", "QueryLocates", "QueryLocate":
+	case "QueryVolumeProfile", "QueryFilteredChartWindow", "QueryStopLimitRoute", "QueryVenueInstrumentEligibility", "QueryLocateEligibility", "QueryLocateQuotes", "QueryLocates", "QueryLocate":
 		return true
 	default:
 		return false
@@ -109,6 +114,8 @@ func (q *queries) handleContext(ctx context.Context, name string, args json.RawM
 		return q.volumeProfile(ctx, args)
 	case "QueryAppInfo":
 		return wsmsg.AppInfo{Version: buildinfo.Version}
+	case "QueryFilteredChartWindow":
+		return q.filteredChartWindow(ctx, args)
 	case "QueryChartWindow":
 		var a wsmsg.QueryChartWindowArgs
 		if json.Unmarshal(args, &a) != nil || q.charts == nil || a.Symbol == "" || a.Timeframe == "" || (a.TailBars > 0) == (a.FromMs < a.ToMs) {

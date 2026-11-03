@@ -13,6 +13,7 @@ import { installOrderCrosshair } from "../../render/chart/orderCrosshair";
 import { DiamondFillPrimitive } from "../../render/chart/diamondPrimitive";
 import { VisibleExtremaPrimitive } from "../../render/chart/visibleExtremaPrimitive";
 import { VolumeProfilePrimitive } from "../../render/chart/volumeProfilePrimitive";
+import { LiquidityBandsPrimitive } from "../../render/chart/liquidityBandsPrimitive";
 import { VolumeProfileController } from "../../render/chart/volumeProfileController";
 import { SessionShadingPrimitive } from "../../render/chart/sessionPrimitive";
 import {
@@ -38,6 +39,7 @@ import { getTvPalette, getTvChrome } from "../../render/chart/tvTheme";
 import { PanelHeaderSlotContext } from "./headerSlot";
 import type { CrosshairCursor, CrosshairSyncHandle } from "../crosshairSync";
 import { ChartHeaderControls } from "./tv/ChartHeaderControls";
+import { FilteredBarStore } from "../../data/FilteredBarStore";
 import { TVDrawingRail, type RailPos } from "./tv/TVDrawingRail";
 import { TVContextMenu, type MenuEntry } from "./tv/TVContextMenu";
 import { TVLegend, type TVLegendHandle } from "./tv/TVLegend";
@@ -51,7 +53,7 @@ import { BarCloseTimer } from "./tv/BarCloseTimer";
 import { positionOrderPillLayer } from "./tv/orderPillLayer";
 import { perf } from "../../perf/PerfMonitor";
 import { bareSymbol } from "../exec/orderStatus";
-import type { QueryChartWindowResult, QueryVolumeProfileResult } from "../../gen/wsmsg";
+import type { QueryChartWindowResult, QueryFilteredChartWindowResult, QueryVolumeProfileResult } from "../../gen/wsmsg";
 import { uiLog } from "../../logging/logger";
 
 const ALL_CHART_BARS = 1_000_000;
@@ -67,7 +69,7 @@ type PendingIndicatorHydration = {
 
 // Adapts a real LWC v5 IChartApi to the controller's minimal ChartApiFacade.
 function makeFacade(chart: IChartApi, palette: Palette, host: HTMLElement): {
-  facade: ChartApiFacade; setPalette: (p: Palette) => void; drawings: DrawingsPrimitive; visibleExtrema: VisibleExtremaPrimitive; volumeProfile: VolumeProfilePrimitive;
+  facade: ChartApiFacade; setPalette: (p: Palette) => void; drawings: DrawingsPrimitive; visibleExtrema: VisibleExtremaPrimitive; volumeProfile: VolumeProfilePrimitive;liquidity: LiquidityBandsPrimitive;
 } {
   let main: ISeriesApi<"Candlestick" | "Bar" | "Line" | "Area"> | null = null;
   let volumeScale: ISeriesApi<"Histogram"> | null = null;
@@ -78,6 +80,7 @@ function makeFacade(chart: IChartApi, palette: Palette, host: HTMLElement): {
   const drawings = new DrawingsPrimitive(palette);
   const visibleExtrema = new VisibleExtremaPrimitive(palette);
   const volumeProfile = new VolumeProfilePrimitive(palette);
+  const liquidity = new LiquidityBandsPrimitive();
 
   const facade: ChartApiFacade = {
     setMainSeries: (kind, options) => {
@@ -97,6 +100,7 @@ function makeFacade(chart: IChartApi, palette: Palette, host: HTMLElement): {
       main.attachPrimitive(drawings);
       main.attachPrimitive(visibleExtrema);
       main.attachPrimitive(volumeProfile);
+      main.attachPrimitive(liquidity);
       if (!sessionAttached) { chart.panes()[0]?.attachPrimitive?.(session); sessionAttached = true; }
       return s as unknown as LwcSeries;
     },
@@ -180,7 +184,7 @@ function makeFacade(chart: IChartApi, palette: Palette, host: HTMLElement): {
     remove: () => { orderCrosshair.dispose(); chart.remove(); },
   };
   const orderCrosshair = installOrderCrosshair(chart, host, facade, () => palette.crosshair);
-  return { facade, setPalette: (p) => { palette = p; session.setPalette(p); diamonds.setPalette(p); drawings.setPalette(p); visibleExtrema.setPalette(p); volumeProfile.setPalette(p); orderCrosshair.refresh(); }, drawings, visibleExtrema, volumeProfile };
+  return { facade, setPalette: (p) => { palette = p; session.setPalette(p); diamonds.setPalette(p); drawings.setPalette(p); visibleExtrema.setPalette(p); volumeProfile.setPalette(p); orderCrosshair.refresh(); }, drawings, visibleExtrema, volumeProfile, liquidity };
 }
 
 export function ChartPanel({ config, stores, scheduler, width, height, linkGroups, commands, onConfigChange, group: groupProp, symbol: symbolProp, monitoring, active }: PanelProps): JSX.Element {
@@ -229,6 +233,17 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
   // Config surfaces (timeframe + indicators) ARE low-rate chrome, so React state is
   // fine here (the hard rule is about market data, not per-chart config).
   const [timeframe, setTf] = useState(timeframe0);
+  const initialDataSource = config.settings.chartDataSource === "filtered" && (timeframe0 === "1m" || timeframe0 === "5m") ? "filtered" : "moomoo";
+  const [chartDataSource, setChartDataSource] = useState<"moomoo" | "filtered">(initialDataSource);
+  const [filteredDataStatus, setFilteredDataStatus] = useState("");
+  const chartDataSourceRef = useRef<"moomoo" | "filtered">(initialDataSource);
+  chartDataSourceRef.current = chartDataSource;
+  const filteredBarsRef = useRef<FilteredBarStore>(new FilteredBarStore());
+  // Avoid repeating a costly five-day provider walk each time a symbol is revisited.
+  const filteredBackfillAttemptRef = useRef<Map<string, number>>(new Map());
+  const filteredBackfillRunningKeyRef = useRef<string | null>(null);
+  const filteredBackfillQueueRef = useRef<Map<string, { symbol: string; timeframe: string; fromMs: number; toMs: number }>>(new Map());
+  const reloadChartDataRef = useRef<(() => void) | null>(null);
   const [crosshairSyncEnabled, setCrosshairSyncEnabled] = useState(() => config.settings.crosshairSync === true);
   const [instances, setInstances] = useState<IndicatorInstance[]>(normalizedIndicators.instances);
 
@@ -352,18 +367,39 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
       if (selectionFrame !== null) return;
       selectionFrame = requestAnimationFrame(() => { selectionFrame = null; refreshSelRef.current?.(); });
     };
-    const { facade, setPalette, drawings, visibleExtrema, volumeProfile } = makeFacade(chart, palette, host);
+    const { facade, setPalette, drawings, visibleExtrema, volumeProfile, liquidity } = makeFacade(chart, palette, host);
     let viewportGeneration = 0;
     let indicatorReloadPending = false;
     let chartSnapshotLoaded = false;
     let chartSnapshotPending = false;
+    let chartSnapshotRerunRequested = false;
     let disposed = false;
     let extremaDirty = true;
+    const barsForChart = (sym: string, tf: string) => chartDataSourceRef.current === "filtered"
+      ? filteredBarsRef.current.series(sym, tf) : stores.bars.series(sym, tf);
+    const latestChartBar = (sym: string, tf: string) => chartDataSourceRef.current === "filtered"
+      ? filteredBarsRef.current.latestBar(sym, tf) : stores.bars.latestBar(sym, tf);
+    const describeFilteredStatus = (result: QueryFilteredChartWindowResult): string => {
+      const d = result.diagnostics;
+      const items = [`Alpaca ${d.alpacaInputReports ?? 0}`, `TickStore ${d.localInputReports ?? 0}`];
+      if (d.alpacaRecencyClamped) items.push("SIP delayed 16m");
+      if (d.alpacaUnsupportedFeed) items.push("Alpaca feed is not SIP");
+      if (d.alpacaLatencyRuleUnavailable) items.push("Alpaca 20s latency filter unavailable");
+      if (d.localCoverageUnproven) {
+        const reason = d.localCoverageReasons?.length ? `: ${d.localCoverageReasons.join(", ")}` : "";
+        items.push(`local coverage unproven${reason}`);
+      }
+      if (d.errors?.length) items.push(`${d.errors.length} source warning${d.errors.length === 1 ? "" : "s"}`);
+      if (result.error) items.push(result.error);
+      items.push("engine indicators unavailable", "Volume Profile unavailable");
+      return items.join(" · ");
+    };
 
     const indicatorKeys = () => instancesRef.current
       .filter((inst) => !isLocalIndicator(inst.type))
       .flatMap((inst) => describeIndicator(inst, paletteRef.current).map((series) => series.key));
     const queryIndicatorHydration = async (instanceId: string) => {
+      if (chartDataSourceRef.current === "filtered") return;
       const pending = pendingIndicatorHydrationRef.current.get(instanceId);
       if (!pending || pending.readyDebt !== 0 || pending.querying || !chartSnapshotLoaded) return;
       if (pending.generation !== chartGenerationRef.current) {
@@ -420,15 +456,153 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
       forceRepaintRef.current = true;
       return true;
     };
+
+    const queryFilteredBackfill = async (symbol: string, timeframe: string, fromMs: number, toMs: number) => {
+      const cacheKey = `${symbol}:${timeframe}`;
+      const now = Date.now();
+      const lastAttempt = filteredBackfillAttemptRef.current.get(cacheKey) ?? 0;
+      // Backfill is a background refresh, not a prerequisite for displaying cached/local candles.
+      if (now - lastAttempt < 5 * 60_000) return;
+      if (filteredBackfillRunningKeyRef.current === cacheKey || filteredBackfillQueueRef.current.has(cacheKey)) return;
+      if (filteredBackfillRunningKeyRef.current !== null) {
+        filteredBackfillQueueRef.current.set(cacheKey, { symbol, timeframe, fromMs, toMs });
+        if (symbol === currentSymbol && timeframe === tfRef.current) {
+          setFilteredDataStatus("TickStore visible · Alpaca history queued");
+        }
+        return;
+      }
+      filteredBackfillRunningKeyRef.current = cacheKey;
+      filteredBackfillAttemptRef.current.set(cacheKey, now);
+      if (symbol === currentSymbol && timeframe === tfRef.current) {
+        setFilteredDataStatus("TickStore visible · loading Alpaca history in background");
+      }
+      const startedAt = performance.now();
+      try {
+        const result = await commands.sendQuery("QueryFilteredChartWindow", {
+          symbol, timeframe, fromMs, toMs,
+        }) as QueryFilteredChartWindowResult;
+        if (disposed) return;
+        // Cache completed history even if the user switched to another symbol
+        // while Alpaca was paging. That makes a later revisit instantaneous.
+        if (result.error || result.diagnostics?.errors?.length) {
+          filteredBarsRef.current.mergeWindow(result.symbol, result.timeframe, result.bars ?? [], fromMs, toMs);
+        } else {
+          filteredBarsRef.current.replaceWindow(result.symbol, result.timeframe, result.bars ?? [], fromMs, toMs);
+        }
+        const isCurrent = symbol === currentSymbol && timeframe === tfRef.current
+          && chartDataSourceRef.current === "filtered";
+        if (isCurrent) {
+          setFilteredDataStatus(describeFilteredStatus(result));
+          forceRepaintRef.current = true;
+          facade.resetPriceScale();
+        }
+        uiLog.debug("filtered chart background backfill completed", {
+          symbol, timeframe, bars: result.bars?.length ?? 0,
+          elapsedMs: Math.round((performance.now() - startedAt) * 10) / 10,
+          alpacaReports: result.diagnostics?.alpacaInputReports ?? 0,
+          localReports: result.diagnostics?.localInputReports ?? 0,
+          error: result.error ?? "",
+        });
+      } catch (error) {
+        if (!disposed && symbol === currentSymbol && timeframe === tfRef.current
+          && chartDataSourceRef.current === "filtered") {
+          setFilteredDataStatus("TickStore visible · Alpaca history unavailable");
+          uiLog.warn("filtered chart background backfill failed", { symbol, error: String(error) });
+        }
+      } finally {
+        if (filteredBackfillRunningKeyRef.current === cacheKey) filteredBackfillRunningKeyRef.current = null;
+        if (disposed) {
+          filteredBackfillQueueRef.current.clear();
+          return;
+        }
+        const next = filteredBackfillQueueRef.current.entries().next();
+        if (!next.done) {
+          const [nextKey, nextRequest] = next.value;
+          filteredBackfillQueueRef.current.delete(nextKey);
+          void queryFilteredBackfill(nextRequest.symbol, nextRequest.timeframe, nextRequest.fromMs, nextRequest.toMs);
+        }
+      }
+    };
     const querySnapshot = async () => {
-	  if (chartSnapshotLoaded || chartSnapshotPending) return;
+      if (disposed || chartSnapshotLoaded) return;
+      if (chartSnapshotPending) {
+        chartSnapshotRerunRequested = true;
+        return;
+      }
       chartSnapshotPending = true;
       try {
         const generation = ++viewportGeneration;
         const startedAt = performance.now();
+        const requestedSymbol = currentSymbol;
+        const requestedTimeframe = tfRef.current;
+        if (chartDataSourceRef.current === "filtered") {
+          if (requestedTimeframe !== "1m" && requestedTimeframe !== "5m") {
+            setFilteredDataStatus("Filtered candles are available only on 1m and 5m");
+            return;
+          }
+          const toMs = Date.now();
+          const fromMs = Math.floor((toMs - 5 * 24 * 60 * 60_000) / 60_000) * 60_000;
+          const cachedBars = filteredBarsRef.current.series(requestedSymbol, requestedTimeframe);
+          if (cachedBars.length > 0) {
+            // Revisited symbols paint from memory immediately. The full provider
+            // history is refreshed in the background at most once per five minutes.
+            setFilteredDataStatus("Cached filtered history · refreshing live tail");
+            facade.resetPriceScale();
+            viewportModeRef.current = "live";
+            facade.scrollToRealTime();
+            chartSnapshotLoaded = true;
+            lastDelayedBackfillAt = toMs;
+            lastDelayedEndMs = Math.floor((toMs - 16 * 60_000) / (requestedTimeframe === "1m" ? 60_000 : 300_000))
+              * (requestedTimeframe === "1m" ? 60_000 : 300_000);
+            forceRepaintRef.current = true;
+            void queryFilteredBackfill(requestedSymbol, requestedTimeframe, fromMs, toMs);
+            return;
+          }
+          setFilteredDataStatus("Loading local TickStore history…");
+          let localResult: QueryFilteredChartWindowResult;
+          try {
+            localResult = await commands.sendQuery("QueryFilteredChartWindow", {
+              symbol: requestedSymbol, timeframe: requestedTimeframe, fromMs, toMs, localOnly: true,
+            }) as QueryFilteredChartWindowResult;
+          } catch (error) {
+            const stillCurrent = !disposed && requestedSymbol === currentSymbol
+              && requestedTimeframe === tfRef.current && chartDataSourceRef.current === "filtered";
+            if (stillCurrent) {
+              setFilteredDataStatus("Local TickStore unavailable · trying Alpaca history");
+              chartSnapshotLoaded = true;
+              lastDelayedBackfillAt = toMs;
+              void queryFilteredBackfill(requestedSymbol, requestedTimeframe, fromMs, toMs);
+              uiLog.warn("filtered chart local snapshot failed", { symbol: requestedSymbol, error: String(error) });
+            }
+            return;
+          }
+          const accepted = !disposed && generation === viewportGeneration && requestedSymbol === currentSymbol
+            && requestedTimeframe === tfRef.current && chartDataSourceRef.current === "filtered";
+          if (accepted) {
+            // Local prints are displayed as soon as the archive read completes.
+            // Do not clear any pre-existing bars while this local-only request runs.
+            filteredBarsRef.current.mergeWindow(localResult.symbol, localResult.timeframe, localResult.bars ?? [], fromMs, toMs);
+            setFilteredDataStatus(describeFilteredStatus(localResult));
+            facade.resetPriceScale();
+            viewportModeRef.current = "live";
+            facade.scrollToRealTime();
+            chartSnapshotLoaded = true;
+            lastDelayedBackfillAt = toMs;
+            lastDelayedEndMs = Math.floor((toMs - 16 * 60_000) / (requestedTimeframe === "1m" ? 60_000 : 300_000))
+              * (requestedTimeframe === "1m" ? 60_000 : 300_000);
+            forceRepaintRef.current = true;
+            uiLog.debug("filtered chart local snapshot loaded", {
+              symbol: localResult.symbol, timeframe: localResult.timeframe, bars: localResult.bars?.length ?? 0,
+              elapsedMs: Math.round((performance.now() - startedAt) * 10) / 10,
+              localCoverageUnproven: localResult.diagnostics?.localCoverageUnproven ?? true,
+            });
+            void queryFilteredBackfill(requestedSymbol, requestedTimeframe, fromMs, toMs);
+          }
+          return;
+        }
         const keys = indicatorReloadPending ? [] : indicatorKeys();
         const result = await commands.sendQuery("QueryChartWindow", {
-          symbol: currentSymbol, timeframe: tfRef.current, fromMs: 0, toMs: 0, tailBars: ALL_CHART_BARS,
+          symbol: requestedSymbol, timeframe: requestedTimeframe, fromMs: 0, toMs: 0, tailBars: ALL_CHART_BARS,
           indicatorSeriesKeys: keys,
         }) as QueryChartWindowResult;
         if (mergeSnapshot(result, generation)) {
@@ -440,18 +614,85 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
           chartSnapshotLoaded = true;
           flushPendingIndicatorHydration();
           uiLog.debug("chart snapshot loaded", {
-            symbol: result.symbol,
-            timeframe: result.timeframe,
-            bars: result.bars?.length ?? 0,
+            symbol: result.symbol, timeframe: result.timeframe, bars: result.bars?.length ?? 0,
             elapsedMs: Math.round((performance.now() - startedAt) * 10) / 10,
           });
         }
-	  } catch {
-		// A disconnected request is settled by WsClient; reconnect triggers the normal snapshot path.
-	  } finally {
-		chartSnapshotPending = false;
-	  }
+      } catch {
+        // A disconnected request is settled by WsClient; reconnect triggers the normal snapshot path.
+      } finally {
+        chartSnapshotPending = false;
+        if (chartSnapshotLoaded) chartSnapshotRerunRequested = false;
+        else if (!disposed && chartSnapshotRerunRequested) {
+          chartSnapshotRerunRequested = false;
+          window.setTimeout(() => { void querySnapshot(); }, 0);
+        }
+      }
     };
+
+    let filteredTailPending = false;
+    let lastDelayedBackfillAt = 0;
+    let lastDelayedEndMs = 0;
+    const queryFilteredTail = async () => {
+      if (disposed || filteredTailPending || !chartSnapshotLoaded || !activeRef.current
+        || chartDataSourceRef.current !== "filtered") return;
+      const timeframe = tfRef.current;
+      if (timeframe !== "1m" && timeframe !== "5m") return;
+      const intervalMs = timeframe === "1m" ? 60_000 : 300_000;
+      const nowMs = Date.now();
+      const currentBucketMs = Math.floor(nowMs / intervalMs) * intervalMs;
+      const fromMs = currentBucketMs - intervalMs;
+      if (nowMs <= currentBucketMs) return;
+      const prior = filteredBarsRef.current.series(currentSymbol, timeframe)
+        .filter((bar) => Date.parse(bar.bucketStart) < fromMs).at(-1);
+      const anchorTimeMs = prior ? Date.parse(prior.bucketStart) : 0;
+      filteredTailPending = true;
+      const requestedSymbol = currentSymbol;
+      try {
+        const result = await commands.sendQuery("QueryFilteredChartWindow", {
+          symbol: requestedSymbol, timeframe, fromMs, toMs: nowMs,
+          ...(prior && Number.isFinite(anchorTimeMs) ? { anchorPrice: prior.c, anchorTimeMs } : {}),
+        }) as QueryFilteredChartWindowResult;
+        if (!disposed && requestedSymbol === currentSymbol && timeframe === tfRef.current
+          && chartDataSourceRef.current === "filtered") {
+          if (!result.error) {
+            if (result.diagnostics?.errors?.length) filteredBarsRef.current.mergeWindow(result.symbol, result.timeframe, result.bars ?? [], fromMs, nowMs);
+            else filteredBarsRef.current.replaceWindow(result.symbol, result.timeframe, result.bars ?? [], fromMs, nowMs);
+          }
+          setFilteredDataStatus(describeFilteredStatus(result));
+          if (result.error) uiLog.warn("filtered chart tail query returned an error", { symbol: requestedSymbol, error: result.error });
+
+          // Alpaca Basic makes SIP trades available after the 16-minute delay.
+          // Revisit the newest fully closed delayed buckets once per minute so
+          // newly released reports fill in behind the locally recorded live tail.
+          if (nowMs - lastDelayedBackfillAt >= 60_000) {
+            lastDelayedBackfillAt = nowMs;
+            const delayedEndMs = Math.floor((nowMs - 16 * 60_000) / intervalMs) * intervalMs;
+            const delayedFromMs = delayedEndMs - 2 * intervalMs;
+            if (delayedEndMs > delayedFromMs && delayedEndMs !== lastDelayedEndMs) {
+              lastDelayedEndMs = delayedEndMs;
+              const delayed = await commands.sendQuery("QueryFilteredChartWindow", {
+                symbol: requestedSymbol, timeframe, fromMs: delayedFromMs, toMs: delayedEndMs,
+              }) as QueryFilteredChartWindowResult;
+              if (!disposed && requestedSymbol === currentSymbol && timeframe === tfRef.current
+                && chartDataSourceRef.current === "filtered") {
+                if (!delayed.error) {
+                  if (delayed.diagnostics?.errors?.length) filteredBarsRef.current.mergeWindow(delayed.symbol, delayed.timeframe, delayed.bars ?? [], delayedFromMs, delayedEndMs);
+                  else filteredBarsRef.current.replaceWindow(delayed.symbol, delayed.timeframe, delayed.bars ?? [], delayedFromMs, delayedEndMs);
+                }
+                setFilteredDataStatus(describeFilteredStatus(delayed));
+                if (delayed.error) uiLog.warn("filtered chart delayed backfill returned an error", { symbol: requestedSymbol, error: delayed.error });
+              }
+            }
+          }
+        }
+      } catch {
+        // Keep the last good tail visible during a brief WebSocket reconnect.
+      } finally {
+        filteredTailPending = false;
+      }
+    };
+    const filteredPoll = window.setInterval(() => { void queryFilteredTail(); }, 2_000);
 
     const clampRight = (range: LogicalRange | null) => {
       // Left pan remains open through blank history until oldest loaded candle
@@ -483,7 +724,14 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
     setFacadePaletteRef.current = setPalette;
     const controller = new ChartController(facade, palette, { symbol, timeframe: timeframe0 },
       {
-        bars: stores.bars, indicators: stores.indicators, commands,
+        bars: {
+          series: (sym, tf) => barsForChart(sym, tf),
+          latestBar: (sym, tf) => latestChartBar(sym, tf),
+        }, indicators: {
+          series: (key) => chartDataSourceRef.current === "filtered" ? [] : stores.indicators.series(key),
+          reset: (key) => stores.indicators.reset(key),
+          getRev: (key) => chartDataSourceRef.current === "filtered" ? 0 : stores.indicators.getRev(key),
+        }, commands,
         isOpenDDown: () => stores.health.getSnapshot().links.find((link) => link.link === "engine-moomoo")?.status === "down",
         viewportMode: () => viewportModeRef.current,
         setViewportMode: (mode) => { viewportModeRef.current = mode; },
@@ -498,6 +746,7 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
     const refreshProfile = () => {
       const inst = instancesRef.current.find((candidate) => candidate.type === "VOLUME_PROFILE") ?? null;
       volumeProfile.setInstance(inst);
+      if (chartDataSourceRef.current === "filtered") { profile.setSelection(null, "Unavailable in Filtered chart mode"); return; }
       if (!inst || inst.hidden || activeRef.current === false || INDICATOR_CATALOG.VOLUME_PROFILE.slots.every((slot) => inst.styles?.[slot.slot]?.hidden)) { profile.setSelection(null); return; }
       const mode = stores.session.getSnapshot().mode;
       if (mode !== "live") { profile.setSelection(null, mode === "demo" ? "Unavailable in demo mode" : "Waiting for session"); return; }
@@ -601,7 +850,7 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
       stores.drawings,
       {
         symbol: () => currentSymbol,
-        bars: () => controller.displayBars().length ? controller.displayBars() : stores.bars.series(currentSymbol, tfRef.current),
+        bars: () => controller.displayBars().length ? controller.displayBars() : barsForChart(currentSymbol, tfRef.current),
         timeframeMs: () => timeframeToMs(tfRef.current as Timeframe),
       },
       {
@@ -654,7 +903,6 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
       indicatorReloadPending = initialized;
       initialized = true;
       chartSnapshotLoaded = false;
-	  chartSnapshotPending = false;
       controller.setSymbol(currentSymbol);
       refreshProfile();
       refreshExtremaRef.current?.();
@@ -663,11 +911,19 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
       interactionRef.current?.onSymbolChanged();
       setChartSymbol(currentSymbol);
       forceRepaintRef.current = true;
-	  if (!symbolChanged && timeframeChanged) {
-        void querySnapshot(); // timeframe-only switch: engine mirror is ready
+      if (chartDataSourceRef.current === "filtered" || (!symbolChanged && timeframeChanged)) {
+        void querySnapshot(); // filtered history is independent of the OpenD chart-ready event
       }
     };
     applySymbolRef.current = applySymbol;
+    reloadChartDataRef.current = () => {
+      chartSnapshotLoaded = false;
+      viewportGeneration++;
+      chartGenerationRef.current++;
+      controller.setSymbol(currentSymbol);
+      forceRepaintRef.current = true;
+      void querySnapshot();
+    };
     applySymbol();
     const offLink = linkGroups.subscribe(applySymbol);
     // SysEvent.seq is only monotonic within its producer (the hub, health
@@ -698,7 +954,7 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
           for (const indicatorKey of indicatorKeys()) stores.indicators.reset(indicatorKey);
           indicatorReloadPending = false;
         }
-		void querySnapshot();
+        void querySnapshot();
       }
       // HealthStore retains only its bounded event window. Mirroring that window
       // here keeps this dedup state bounded too.
@@ -807,6 +1063,7 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
     // always "dirty" (so a panel mounting after data already exists still picks
     // it up on its very first scheduled frame, not just on the next new message).
     let lastBarsRev = -1;
+    let lastBookRev = -1;
     let lastIndicatorsRev = -1;
     let lastFillsRev = -1;
     let lastDrawingsRev = -1;
@@ -826,8 +1083,9 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
     const off = scheduler.register({
       id: `chart:${config.id}`,
       isDirty: () => {
-        const barsRev = stores.bars.getRev(currentSymbol, tfRef.current)
-          + (tfRef.current === "D" ? stores.bars.getRev(currentSymbol, "1m") : 0);
+        const barsRev = chartDataSourceRef.current === "filtered"
+          ? filteredBarsRef.current.getRev(currentSymbol, tfRef.current)
+          : stores.bars.getRev(currentSymbol, tfRef.current) + (tfRef.current === "D" ? stores.bars.getRev(currentSymbol, "1m") : 0);
         // Recomputed fresh every call (not cached via the `[instances]` effect
         // below): instancesRef.current is kept synchronously authoritative by
         // setInstancesNow specifically to avoid a same-tick double-mutation bug
@@ -840,10 +1098,13 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
         // here instead of caching sidesteps the staleness question entirely at
         // no meaningful cost.
         let indicatorsRev = 0;
-        for (const inst of instancesRef.current) {
-          if (isLocalIndicator(inst.type)) continue;
-          for (const d of describeIndicator(inst, paletteRef.current)) indicatorsRev += stores.indicators.getRev(d.key);
+        if (chartDataSourceRef.current !== "filtered") {
+          for (const inst of instancesRef.current) {
+            if (isLocalIndicator(inst.type)) continue;
+            for (const d of describeIndicator(inst, paletteRef.current)) indicatorsRev += stores.indicators.getRev(d.key);
+          }
         }
+        const bookRev = stores.book.getRev(currentSymbol);
         const fillsRev = stores.fills.getRev();
         const drawingsRev = stores.drawings.getRev();
         const openDStatus = tfRef.current === "10s"
@@ -853,10 +1114,11 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
         const wallBucket = usesBoundaryManagedFollow(tfRef.current) || tfRef.current === "D"
           ? Math.floor(stores.marketClock.nowMs() / (tfRef.current === "D" ? 60_000 : timeframeToMs(tfRef.current as Timeframe)))
           : -1;
-        const changed = barsRev !== lastBarsRev || indicatorsRev !== lastIndicatorsRev || fillsRev !== lastFillsRev || drawingsRev !== lastDrawingsRev
+        const changed = barsRev !== lastBarsRev || bookRev !== lastBookRev|| indicatorsRev !== lastIndicatorsRev || fillsRev !== lastFillsRev || drawingsRev !== lastDrawingsRev
           || paneSig !== lastPaneSig || wallBucket !== lastWallBucket || openDStatus !== lastOpenDStatus || forceRepaintRef.current;
         lastBarsRev = barsRev;
         lastIndicatorsRev = indicatorsRev;
+        lastBookRev = bookRev;
         lastFillsRev = fillsRev;
         lastDrawingsRev = drawingsRev;
         lastPaneSig = paneSig;
@@ -869,9 +1131,10 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
         const browserNowMs = Date.now();
         const nowMs = stores.marketClock.nowMs();
         if (chartSnapshotLoaded) controller.sync(nowMs);
+        liquidity.setBook(stores.book.get(currentSymbol), tfRef.current);
         refreshProfile();
         refreshExtremaRef.current?.();
-        const paintedBars = chartSnapshotLoaded ? stores.bars.series(currentSymbol, tfRef.current) : [];
+        const paintedBars = chartSnapshotLoaded ? barsForChart(currentSymbol, tfRef.current) : [];
         if (pendingFirstPaint && pendingFirstPaint.symbol === currentSymbol && pendingFirstPaint.timeframe === tfRef.current && paintedBars.length > 0) {
           const timing = pendingFirstPaint;
           pendingFirstPaint = null;
@@ -896,7 +1159,7 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
           const marketBoundaryMs = bucketStartMs(nowMs, timeframe);
           const traceKey = `${currentSymbol}|${timeframe}|${marketBoundaryMs}`;
           if (traceKey !== lastBoundaryTraceKey) {
-            const rawTail = stores.bars.series(currentSymbol, timeframe).at(-1);
+            const rawTail = barsForChart(currentSymbol, timeframe).at(-1);
             const rawTailMs = rawTail ? Date.parse(rawTail.bucketStart) : NaN;
             const browserBoundaryMs = bucketStartMs(browserNowMs, timeframe);
             const clock = stores.marketClock.snapshot();
@@ -941,7 +1204,7 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
         // Anchor on the newest eligible raw exchange bar, not only an
         // in-progress tail. Quiet/delayed buckets retain the last confirmed
         // same-day price while the active ET session remains open.
-        const rawBars = chartSnapshotLoaded ? stores.bars.series(currentSymbol, tfRef.current) : [];
+        const rawBars = chartSnapshotLoaded ? barsForChart(currentSymbol, tfRef.current) : [];
         const candidate = latestEligibleCountdownBar(rawBars, tfRef.current as Timeframe, nowMs);
         const y = candidate ? facade.priceToCoordinate(candidate.c) : null;
         const next = candidate && y != null && Number.isFinite(y) ? { y, up: candidate.c >= candidate.o, price: candidate.c } : null;
@@ -961,6 +1224,8 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
 
     return () => {
       disposed = true;
+      window.clearInterval(filteredPoll);
+      if (reloadChartDataRef.current) reloadChartDataRef.current = null;
       viewportGeneration++;
       chartGenerationRef.current++;
       pendingIndicatorHydrationRef.current.clear();
@@ -1070,12 +1335,30 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
     });
   };
 
+  const changeChartDataSource = (source: "moomoo" | "filtered") => {
+    if (source === "filtered" && timeframe !== "1m" && timeframe !== "5m") return;
+    if (source === chartDataSourceRef.current) return;
+    chartDataSourceRef.current = source;
+    setChartDataSource(source);
+    setFilteredDataStatus(source === "filtered" ? "Loading filtered trade history…" : "");
+    persist({ chartDataSource: source });
+    refreshProfileRef.current();
+    refreshExtremaRef.current?.();
+    reloadChartDataRef.current?.();
+  };
   const changeTimeframe = (tf: string) => {
     // Imperative chart reset/query runs before React commits state. Keep hot-path
     // ref authoritative now; otherwise Weekly switch resubscribes engine to W
     // while the snapshot query still requests stale D (and vice versa).
     tfRef.current = tf;
-    setTf(tf); controllerRef.current?.setTimeframe(tf); refreshExtremaRef.current?.(); applySymbolRef.current?.(); forceRepaintRef.current = true; persist({ timeframe: tf });
+    const nextDataSource = chartDataSourceRef.current === "filtered" && tf !== "1m" && tf !== "5m" ? "moomoo" : chartDataSourceRef.current;
+    if (nextDataSource !== chartDataSourceRef.current) {
+      chartDataSourceRef.current = nextDataSource;
+      setChartDataSource(nextDataSource);
+      setFilteredDataStatus("");
+    }
+    setTf(tf); controllerRef.current?.setTimeframe(tf); refreshExtremaRef.current?.(); applySymbolRef.current?.(); forceRepaintRef.current = true;
+    persist({ timeframe: tf, ...(nextDataSource !== chartDataSource ? { chartDataSource: nextDataSource } : {}) });
     refreshProfileRef.current();
   };
   // Every mutation goes through instancesRef (updated synchronously here, not
@@ -1293,9 +1576,10 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
   // provider is mounted but its DOM node hasn't attached yet — render nothing for
   // that one tick rather than flash the controls inline first.
   const headerControls = <ChartHeaderControls palette={appPalette} timeframe={timeframe}
+    dataSource={chartDataSource} onDataSource={changeChartDataSource} dataStatus={filteredDataStatus}
     onTimeframe={changeTimeframe} onAddIndicator={addIndicator}
     volumeAvailable={!instances.some((inst) => inst.type === "VOLUME")}
-    profileAvailable={!instances.some((inst) => inst.type === "VOLUME_PROFILE")}
+    profileAvailable={chartDataSource !== "filtered" && !instances.some((inst) => inst.type === "VOLUME_PROFILE")}
     onScreenshot={onScreenshot} onOpenSettings={() => setChartSettingsOpen(true)}
     crosshairSyncEnabled={crosshairSyncEnabled} onToggleCrosshairSync={toggleCrosshairSync}
     {...(group === null ? { crosshairSyncDisabledReason: "Link this chart to a Link Group to enable Crosshair Sync" } : {})}

@@ -297,3 +297,29 @@ func TestOlderHistoryCannotReplaceCurrentTrustedClose(t *testing.T) {
 		t.Fatalf("older history replaced current anchor: %+v", bar)
 	}
 }
+
+func TestStampHistoricalTradeEligibilitySortsAndReplaysPerSymbol(t *testing.T) {
+	day := time.Date(2026, 7, 6, 9, 31, 0, 0, session.Loc())
+	raw := []feed.Tick{
+		{Symbol: "US.AAPL", Seq: 2, TsMs: day.Add(time.Minute).UnixMilli(), Price: 101, Volume: 10, Condition: feed.TradeConditionPriorReferencePrice},
+		{Symbol: "US.MSFT", Seq: 1, TsMs: day.Add(2 * time.Minute).UnixMilli(), Price: 200, Volume: 5, Condition: feed.TradeConditionOddLot},
+		{Symbol: "US.AAPL", Seq: 1, TsMs: day.UnixMilli(), Price: 100, Volume: 10, Condition: feed.TradeConditionPriorReferencePrice},
+	}
+
+	got := StampHistoricalTradeEligibility(raw)
+	if len(got) != 3 {
+		t.Fatalf("stamped count = %d, want 3", len(got))
+	}
+	if got[0].Symbol != "US.AAPL" || got[0].Seq != 1 || !got[0].RangeEligible || got[0].LastEligible || !got[0].VolumeEligible {
+		t.Fatalf("first AAPL report eligibility = %+v", got[0])
+	}
+	if got[1].Symbol != "US.AAPL" || got[1].Seq != 2 || !got[1].RangeEligible || got[1].LastEligible || !got[1].VolumeEligible {
+		t.Fatalf("second AAPL report eligibility = %+v", got[1])
+	}
+	if got[2].Symbol != "US.MSFT" || got[2].RangeEligible || got[2].LastEligible || !got[2].VolumeEligible {
+		t.Fatalf("MSFT report eligibility = %+v", got[2])
+	}
+	if raw[0].RangeEligible || raw[0].LastEligible || raw[0].VolumeEligible {
+		t.Fatalf("input was mutated: %+v", raw[0])
+	}
+}

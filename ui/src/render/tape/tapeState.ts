@@ -146,7 +146,7 @@ export function buildTapeRows(
     return {
       seq: seqs[i],
       time: formatTapeTime(t.ts),
-      price: formatPrice(t.price, quoteDecimals(t.price)),
+      price: formatPrice(t.price, quoteDecimals(t.price, 2)),
       size: formatSize(t.size),
       direction: t.direction,
       significance: t.significance ?? "none",

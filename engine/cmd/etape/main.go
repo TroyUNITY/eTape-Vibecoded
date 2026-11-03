@@ -37,6 +37,7 @@ import (
 	"github.com/earlisreal/eTape/engine/internal/feed/opend"
 	"github.com/earlisreal/eTape/engine/internal/health"
 	histalpaca "github.com/earlisreal/eTape/engine/internal/hist/alpaca"
+	"github.com/earlisreal/eTape/engine/internal/hist/tradehistory"
 	histyahoo "github.com/earlisreal/eTape/engine/internal/hist/yahoo"
 	"github.com/earlisreal/eTape/engine/internal/md"
 	"github.com/earlisreal/eTape/engine/internal/news"
@@ -557,9 +558,27 @@ func boot(ctx context.Context, onListening func(addr string), onShutdownSummary 
 	// --- uihub (listening BEFORE OpenD is dialed) ---
 	venueAdm := venueadmin.New(*cfgPath, creds.DefaultPath(), config.VenueConfig{Venues: cfg.Venues, Gate: cfg.Gate})
 	venueProbe := venueprobe.New(creds.DefaultPath(), cfg.OpenD.Addr(), uihubClk)
+	var alpacaSrc *histalpaca.Client
+	if !*demo && cfg.Backfill.Alpaca.Enabled {
+		if p, label, err := resolveBackfillAlpacaCreds(cfg, credsFile); err == nil {
+			alpacaSrc = histalpaca.New("", p.KeyID, p.SecretKey, cfg.Backfill.Alpaca.Feed, clock.System{})
+			scope := fmt.Sprintf("%x", sha256.Sum256([]byte(p.KeyID)))
+			alpacaSrc.SetRestartCooldown(netx.NewRestartCooldown(dbPath+".alpaca-cooldown.json", scope, time.Minute, clock.System{}))
+			log.Info("backfill: alpaca provider resolved", "from", label, "feed", cfg.Backfill.Alpaca.Feed)
+		} else if errors.Is(err, errAlpacaLiveCreds) {
+			log.Warn("backfill: refusing alpaca-live creds for read-only historical provider", "key", cfg.Backfill.Alpaca.CredsKey)
+		} else {
+			log.Warn("backfill: alpaca provider disabled (no creds)", "key", cfg.Backfill.Alpaca.CredsKey, "err", err)
+		}
+	}
 	var volumeProfiles *tickstore.ProfileReader
 	if !*demo {
 		volumeProfiles = tickstore.NewProfileReader(filepath.Join(home, ".eTape", "ticks"), recorder)
+	}
+	var filteredHistory *tradehistory.Service
+	if !*demo {
+		tradeReader := tickstore.NewTradeReader(filepath.Join(home, ".eTape", "ticks"), recorder)
+		filteredHistory = tradehistory.New(alpacaSrc, tradeReader)
 	}
 	hub, srv := uihub.New(uihubClk, uihub.Config{
 		Venues: venueMetasWithHeldStopLimitAck(cfg, heldStopLimitIdentity, heldStopLimitAck, heldLITAck), Global: uihub.GlobalLimits{
@@ -572,6 +591,7 @@ func boot(ctx context.Context, onListening func(addr string), onShutdownSummary 
 		OutBuf: cfg.UIHub.OutboundQueue, DistDir: cfg.UIHub.DistDir,
 		Demo:               *demo,
 		VolumeProfiles:     volumeProfiles,
+		FilteredHistory:    filteredHistory,
 		AccountDemand:      demands,
 		Eligibility:        venueEligibilityRegistry(vbs),
 		FocusMainWorkspace: focusMainWorkspace,
@@ -752,19 +772,6 @@ func boot(ctx context.Context, onListening func(addr string), onShutdownSummary 
 		hub.SetMarketClockSource(probe)
 		feedForHub, pollReq, mmProbe, demand = fd, client, probe, fd
 
-		var alpacaSrc *histalpaca.Client
-		if cfg.Backfill.Alpaca.Enabled {
-			if p, label, err := resolveBackfillAlpacaCreds(cfg, credsFile); err == nil {
-				alpacaSrc = histalpaca.New("", p.KeyID, p.SecretKey, cfg.Backfill.Alpaca.Feed, clock.System{})
-				scope := fmt.Sprintf("%x", sha256.Sum256([]byte(p.KeyID)))
-				alpacaSrc.SetRestartCooldown(netx.NewRestartCooldown(dbPath+".alpaca-cooldown.json", scope, time.Minute, clock.System{}))
-				log.Info("backfill: alpaca provider resolved", "from", label, "feed", cfg.Backfill.Alpaca.Feed)
-			} else if errors.Is(err, errAlpacaLiveCreds) {
-				log.Warn("backfill: refusing alpaca-live creds for read-only historical provider", "key", cfg.Backfill.Alpaca.CredsKey)
-			} else {
-				log.Warn("backfill: alpaca provider disabled (no creds)", "key", cfg.Backfill.Alpaca.CredsKey, "err", err)
-			}
-		}
 		if alpacaSrc != nil {
 			scannerHistoryFetch = scannerRELVolFetcher(alpacaSrc, cfg.Backfill.Alpaca.Feed, false)
 		}

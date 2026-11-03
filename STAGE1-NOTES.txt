@@ -1,0 +1,21 @@
+eTape Stage 1 - historical trade retrieval backend
+
+This package is based on the latest eTape-colors-sidebar-no exe source ZIP supplied
+in this conversation. It adds Alpaca historical individual-trade retrieval and
+TickStore trade-history reads. Chart/candle construction, chart UI, Moomoo K-lines,
+and execution code have not been changed.
+
+The archive omits ui/node_modules (reinstall from ui/package-lock.json with npm ci).
+The existing dist/etape-custom.exe is retained from the supplied ZIP and was NOT
+rebuilt; it does not contain these Stage 1 source changes.
+
+Validation:
+- gofmt: passed for all changed Go files.
+- trailing-whitespace scan: passed.
+- Go tests/build: not run. This source declares Go 1.26.5; the environment only has
+  Go 1.23.2 and could not download the required toolchain because network DNS was
+  unavailable. Run from engine on a machine with Go 1.26.5:
+    go test ./internal/hist/alpaca ./internal/hist/tradehistory ./internal/tickstore
+
+The trade-history service is backend groundwork for Stage 2. It is not yet wired
+to chart-open backfill; automatic chart integration is Stage 3.

@@ -7,7 +7,7 @@ import { LIGHT } from "../../../render/palette";
 
 afterEach(cleanup);
 const base = {
-  palette: LIGHT, timeframe: "1m",
+  palette: LIGHT, timeframe: "1m", dataSource: "moomoo" as const, onDataSource: vi.fn(),
   onTimeframe: vi.fn(), onAddIndicator: vi.fn(), onScreenshot: vi.fn(), onOpenSettings: vi.fn(),
   crosshairSyncEnabled: false, onToggleCrosshairSync: vi.fn(),
   drawingToolsVisible: true, onToggleDrawingTools: vi.fn(),
@@ -32,6 +32,21 @@ describe("ChartHeaderControls", () => {
     expect(inactive.style.fontWeight).toBe("500");
     // jsdom normalizes inline hex colors to rgb() — compare colors, not styling identity.
     expect(active.style.color).not.toBe(inactive.style.color);
+  });
+
+  it("switches between Moomoo and Filtered data sources and disables Filtered outside 1m/5m", () => {
+    const { rerender } = render(<ChartHeaderControls {...base} />);
+    const moomoo = screen.getByRole("button", { name: "Moomoo chart data" });
+    const filtered = screen.getByRole("button", { name: "Filtered chart data" });
+    expect(moomoo.getAttribute("aria-pressed")).toBe("true");
+    expect(filtered.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(filtered);
+    expect(base.onDataSource).toHaveBeenCalledWith("filtered");
+
+    rerender(<ChartHeaderControls {...base} timeframe="D" />);
+    expect((screen.getByRole("button", { name: "Filtered chart data" }) as HTMLButtonElement).disabled).toBe(true);
+    rerender(<ChartHeaderControls {...base} timeframe="5m" />);
+    expect((screen.getByRole("button", { name: "Filtered chart data" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("fires callbacks for timeframe, screenshot, settings", () => {

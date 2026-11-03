@@ -11,6 +11,7 @@ export { TIMEFRAMES } from "../../../render/chart/barBucket";
 
 export interface ChartHeaderControlsProps {
   palette: Palette; timeframe: string;
+  dataSource: "moomoo" | "filtered"; onDataSource: (source: "moomoo" | "filtered") => void; dataStatus?: string;
   onTimeframe: (tf: string) => void;
   onAddIndicator: (type: IndicatorType) => void; onScreenshot: () => void; onOpenSettings: () => void;
   volumeAvailable?: boolean;
@@ -26,7 +27,7 @@ export interface ChartHeaderControlsProps {
 // header already shows — no separate symbol button here, and styled with the app
 // Daylight-Ledger palette + sans font so it reads as chrome, not canvas.
 export function ChartHeaderControls(
-  { palette, timeframe, onTimeframe, onAddIndicator, onScreenshot, onOpenSettings, volumeAvailable = true, profileAvailable = true,
+  { palette, timeframe, dataSource, onDataSource, dataStatus, onTimeframe, onAddIndicator, onScreenshot, onOpenSettings, volumeAvailable = true, profileAvailable = true,
     crosshairSyncEnabled, onToggleCrosshairSync, crosshairSyncDisabledReason,
     drawingToolsVisible, onToggleDrawingTools }: ChartHeaderControlsProps,
 ): JSX.Element {
@@ -59,6 +60,27 @@ export function ChartHeaderControls(
           onChange={(e) => onTimeframe(e.currentTarget.value)} style={timeframeSelect}>
           {TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
         </select>
+        {sep}
+        <div style={{ display: "flex", alignItems: "center", gap: 1, flex: "0 0 auto" }} aria-label="chart data source">
+          {(["moomoo", "filtered"] as const).map((source) => {
+            const selected = source === dataSource;
+            const filteredDisabled = source === "filtered" && timeframe !== "1m" && timeframe !== "5m";
+            const label = source === "moomoo" ? "Moomoo" : "Filtered";
+            return <HoverButton key={source} type="button" aria-label={`${label} chart data`} aria-pressed={selected}
+              title={filteredDisabled ? "Filtered candles are available only on 1m and 5m" : `${label} chart data`}
+              disabled={filteredDisabled} onClick={() => onDataSource(source)}
+              style={{ ...btn, padding: "2px 6px", borderRadius: 3, fontWeight: selected ? 700 : 500,
+                color: selected ? palette.accent : filteredDisabled ? palette.textMuted : palette.textMuted,
+                background: selected ? palette.surface : "transparent", opacity: filteredDisabled ? 0.45 : 1 }}
+              hoverStyle={{ background: palette.surface, color: selected ? palette.accent : palette.text }}>
+              {label}
+            </HoverButton>;
+          })}
+        </div>
+        {dataSource === "filtered" && dataStatus && <span title={dataStatus}
+          style={{ maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: palette.textMuted, fontSize: 10, paddingLeft: 4 }}>
+          {dataStatus}
+        </span>}
         {sep}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 2, flex: "0 0 auto" }}>

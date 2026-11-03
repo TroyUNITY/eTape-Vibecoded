@@ -19,7 +19,12 @@ import (
 	"github.com/earlisreal/eTape/engine/internal/singleinstance"
 )
 
-var ErrProfileBusy = errors.New("volume profile reader busy")
+var (
+	ErrProfileBusy          = errors.New("volume profile reader busy")
+	ErrTradeHistoryTooLarge = errors.New("TickStore trade history exceeds its safety limit")
+)
+
+const maxTradeHistoryPrints = 1_000_000
 
 type profileBoundary struct{ ID, AsOfMs int64 }
 type profileCursor struct{ Time, ID int64 }
@@ -35,16 +40,45 @@ type ProfileRead struct {
 	AsOfMs, FirstPrintMs, LastPrintMs int64
 }
 
+// TradeRead is the same evidence shape as ProfileRead, with a larger bounded
+// result budget intended for historical trade reconstruction rather than the
+// latency-sensitive Volume Profile calculation.
+type TradeRead = ProfileRead
+
 // ProfileReader owns no persistent SQLite handles or writer connection. Each
 // indexed chunk releases its read lock and handles before maintenance proceeds.
 type ProfileReader struct {
-	directory string
-	owner     *Store
-	reads     chan struct{}
+	directory     string
+	owner         *Store
+	reads         chan struct{}
+	maxPrints     int
+	timeout       time.Duration
+	chunkTimeout  time.Duration
+	tooLargeError error
 }
 
 func NewProfileReader(directory string, owner *Store) *ProfileReader {
-	return &ProfileReader{directory: directory, owner: owner, reads: make(chan struct{}, 2)}
+	return newProfileReader(directory, owner, md.VolumeProfileMaxPrints, 2*time.Second, 50*time.Millisecond, md.ErrVolumeProfileTooLarge)
+}
+
+func newProfileReader(directory string, owner *Store, maxPrints int, timeout, chunkTimeout time.Duration, tooLargeError error) *ProfileReader {
+	return &ProfileReader{
+		directory: directory, owner: owner, reads: make(chan struct{}, 2),
+		maxPrints: maxPrints, timeout: timeout, chunkTimeout: chunkTimeout, tooLargeError: tooLargeError,
+	}
+}
+
+// TradeReader is a TickStore reader for historical chart reconstruction. It
+// shares the archive's safe segmented-read implementation but permits a
+// larger, explicitly bounded query than the interactive Volume Profile path.
+type TradeReader struct{ reader *ProfileReader }
+
+func NewTradeReader(directory string, owner *Store) *TradeReader {
+	return &TradeReader{reader: newProfileReader(directory, owner, maxTradeHistoryPrints, 30*time.Second, 250*time.Millisecond, ErrTradeHistoryTooLarge)}
+}
+
+func (r *TradeReader) Read(ctx context.Context, symbol string, from, to int64) (TradeRead, error) {
+	return r.reader.Read(ctx, symbol, from, to)
 }
 
 func (r *ProfileReader) Read(ctx context.Context, symbol string, from, to int64) (ProfileRead, error) {
@@ -58,7 +92,7 @@ func (r *ProfileReader) Read(ctx context.Context, symbol string, from, to int64)
 	default:
 		return out, ErrProfileBusy
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return out, err
@@ -138,7 +172,7 @@ func (r *ProfileReader) Read(ctx context.Context, symbol string, from, to int64)
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return out, ctxErr
 				}
-				if errors.Is(err, md.ErrVolumeProfileTooLarge) || errors.Is(err, ErrProfileBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				if errors.Is(err, r.tooLargeError) || errors.Is(err, md.ErrVolumeProfileTooLarge) || errors.Is(err, ErrTradeHistoryTooLarge) || errors.Is(err, ErrProfileBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 					return out, err
 				}
 				out.addReason("unreadable_segment")
@@ -223,7 +257,7 @@ func (r *ProfileReader) readChunk(ctx context.Context, path string, maxID int64,
 		}
 		defer r.owner.profileGate.RUnlock()
 	}
-	ctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, r.chunkTimeout)
 	defer cancel()
 	// SQLite may return its own error when cancellation interrupts a query.
 	// Preserve the deadline/cancellation so callers never publish a prefix.
@@ -275,8 +309,8 @@ func (r *ProfileReader) readChunk(ctx context.Context, path string, maxID int64,
 			out.addReason("invalid_report")
 			continue
 		}
-		if len(out.Prints) >= md.VolumeProfileMaxPrints {
-			return count, md.ErrVolumeProfileTooLarge
+		if len(out.Prints) >= r.maxPrints {
+			return count, r.tooLargeError
 		}
 		indexed.Normalized.Source = nil
 		indexed.Normalized.Symbol = symbol

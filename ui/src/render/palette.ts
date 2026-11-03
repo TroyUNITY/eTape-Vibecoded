@@ -70,7 +70,7 @@ export const LIGHT: Palette = {
   volUp: "rgba(23,122,88,0.34)", volDown: "rgba(194,51,77,0.30)",
   buyFill: "#0E5A3F", sellFill: "#931E37", shortFill: "#1565C0", fillOutline: "#FBFAF7",
   neutral: "#6A7280",
-  depthBid: "rgba(23,122,88,0.13)", depthAsk: "rgba(194,51,77,0.11)",
+  depthBid: "rgba(50,205,50,0.40)", depthAsk: "rgba(255,0,0,0.35)",
   flashBuy: "rgba(23,122,88,0.20)", flashSell: "rgba(194,51,77,0.20)", flashNeutral: "rgba(106,114,128,0.16)",
   flashBuyStrong: "rgba(23,122,88,0.34)", flashSellStrong: "rgba(194,51,77,0.34)", flashNeutralStrong: "rgba(106,114,128,0.28)",
   orderMark: "#9A6A1B",

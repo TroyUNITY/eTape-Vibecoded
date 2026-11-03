@@ -8,6 +8,7 @@ import (
 	"github.com/earlisreal/eTape/engine/internal/eligibility"
 	"github.com/earlisreal/eTape/engine/internal/exec"
 	"github.com/earlisreal/eTape/engine/internal/feed"
+	"github.com/earlisreal/eTape/engine/internal/hist/tradehistory"
 	"github.com/earlisreal/eTape/engine/internal/locates"
 	"github.com/earlisreal/eTape/engine/internal/md"
 	"github.com/earlisreal/eTape/engine/internal/tickstore"
@@ -80,6 +81,7 @@ type Config struct {
 	DistDir                        string
 	Demo                           bool
 	VolumeProfiles                 *tickstore.ProfileReader
+	FilteredHistory                *tradehistory.Service
 	AccountDemand                  *exec.AccountDemandRegistry
 	Eligibility                    EligibilityRegistry
 	OnConfigSet                    func(key, value string)
@@ -127,6 +129,7 @@ func New(clk clock.Clock, cfg Config, ex ExecCore, st Stores, ind Indicators, va
 	cmd.restart = requestRestart
 	cmd.startDemo = startDemo
 	qry := newQueries(st, clk, h)
+	qry.filteredHistory = cfg.FilteredHistory
 	if !cfg.Demo {
 		qry.profileReader = cfg.VolumeProfiles
 	}

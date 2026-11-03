@@ -1,6 +1,7 @@
 package md
 
 import (
+	"sort"
 	"time"
 
 	"github.com/earlisreal/eTape/engine/internal/feed"
@@ -110,4 +111,38 @@ func beforeLastSaleCutoff(tsMs int64) bool {
 	et := time.UnixMilli(tsMs).In(session.Loc())
 	s := session.Schedule(et)
 	return s.TradingDay && !et.After(s.Close.Add(90*time.Second))
+}
+
+// StampHistoricalTradeEligibility replays the live condition policy over a
+// historical slice of raw normalized prints. The returned copy is sorted by
+// exchange timestamp/sequence; the caller's slice is not mutated. The
+// first-business-day-only last-sale rule is deliberately fail-closed because
+// a range-scoped TickStore read cannot prove that it contains the day's first
+// qualifying report. Its range and volume eligibility are still preserved.
+func StampHistoricalTradeEligibility(ticks []feed.Tick) []feed.Tick {
+	out := append([]feed.Tick(nil), ticks...)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].TsMs == out[j].TsMs {
+			return out[i].Seq < out[j].Seq
+		}
+		return out[i].TsMs < out[j].TsMs
+	})
+	states := make(map[string]*eligibilityState)
+	for i := range out {
+		state := states[out[i].Symbol]
+		if state == nil {
+			state = &eligibilityState{}
+			states[out[i].Symbol] = state
+		}
+		policy := conditionPolicyFor(out[i].Condition)
+		out[i] = state.stamp(out[i])
+		if policy.lastMode == lastFirstBusinessDay {
+			// A range-scoped archive read cannot prove that this is the first
+			// qualifying report of the business day. Keep its range/volume
+			// treatment, but do not let a mid-session query manufacture a new
+			// first-of-day close.
+			out[i].LastEligible = false
+		}
+	}
+	return out
 }

@@ -107,6 +107,17 @@ History and archive anchors embed the full input bar (including source reference
 in bucket basis snapshots, even when no raw OpenD source payload exists. A later
 report-based anchor clears that history evidence.
 
+## Historical trade reads
+
+`NewTradeReader` reads committed normalized Reported Prints through the same
+segmented, read-only SQLite path used by Volume Profile, but with a separate
+30-second query budget and a bounded one-million-print result ceiling. Its
+`TradeRead` retains archive coverage caveats and first/last timestamps. The
+interactive Volume Profile reader keeps its smaller 96,000-print budget and
+two-second latency bound; historical reconstruction must use `NewTradeReader`
+instead. Exceeding the historical ceiling returns `ErrTradeHistoryTooLarge`
+rather than publishing a silently truncated prefix.
+
 ## Volume Profile reads
 
 `ProfileReader` reads captured normalized prints from separate read-only SQLite connections. The writer publishes immutable committed row-ID boundaries after each batch; receipt filenames never filter exchange-time selection. Reads release every handle and the owner read lock after at most 1,024 rows, with a 50 ms chunk deadline. Writer maintenance takes the exclusive lock before writes, checkpointing, rotation or pruning; readers wait without SQLite handles for at most 250 ms, then yield Busy if maintenance still owns it. Two reads, a two-second overall deadline and 96,000 retained reports bound work; large selections fail explicitly without a prefix result. Source references are discarded from the working projection.

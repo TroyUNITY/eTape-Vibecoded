@@ -68,7 +68,7 @@ describe("TapePanel", () => {
 
   it("derives the header columns from width and restores Time when expanded", () => {
     const { rerenderWidth } = renderTape(260);
-    expect(screen.getByText("Price")).toBeTruthy();
+    expect(screen.getByText("Side / Price")).toBeTruthy();
     expect(screen.getByText("Size")).toBeTruthy();
     expect(screen.getByText("Time")).toBeTruthy();
 
@@ -77,12 +77,12 @@ describe("TapePanel", () => {
 
     rerenderWidth(TAPE_TIME_VISIBLE_MIN_WIDTH - 1);
     expect(screen.queryByText("Time")).toBeNull();
-    expect(screen.getByText("Price")).toBeTruthy();
+    expect(screen.getByText("Side / Price")).toBeTruthy();
     expect(screen.getByText("Size")).toBeTruthy();
 
     rerenderWidth(TAPE_MIN_WIDTH);
     expect(screen.queryByText("Time")).toBeNull();
-    expect(screen.getByText("Price")).toBeTruthy();
+    expect(screen.getByText("Side / Price")).toBeTruthy();
     expect(screen.getByText("Size")).toBeTruthy();
 
     rerenderWidth(TAPE_TIME_VISIBLE_MIN_WIDTH);

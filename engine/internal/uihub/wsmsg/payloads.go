@@ -66,17 +66,19 @@ type SignificanceStatus struct {
 }
 
 type Bar struct {
-	Symbol      string  `json:"symbol"`
-	Timeframe   string  `json:"timeframe"`
-	BucketStart string  `json:"bucketStart"`
-	O           float64 `json:"o"`
-	H           float64 `json:"h"`
-	L           float64 `json:"l"`
-	C           float64 `json:"c"`
-	V           int64   `json:"v"`
-	InProgress  bool    `json:"inProgress"`
-	Gap         bool    `json:"gap,omitempty"`
-	VolumeOnly  bool    `json:"volumeOnly,omitempty"`
+	Symbol           string  `json:"symbol"`
+	Timeframe        string  `json:"timeframe"`
+	BucketStart      string  `json:"bucketStart"`
+	O                float64 `json:"o"`
+	H                float64 `json:"h"`
+	L                float64 `json:"l"`
+	C                float64 `json:"c"`
+	V                int64   `json:"v"`
+	InProgress       bool    `json:"inProgress"`
+	Gap              bool    `json:"gap,omitempty"`
+	VolumeOnly       bool    `json:"volumeOnly,omitempty"`
+	Source           string  `json:"source,omitempty"`
+	CoverageComplete bool    `json:"coverageComplete,omitempty"`
 }
 
 type IndicatorPoint struct {
@@ -862,6 +864,49 @@ type QueryChartWindowResult struct {
 	Bars            []Bar                   `json:"bars"`
 	Indicators      []IndicatorSeriesWindow `json:"indicators"`
 	HistoryRevision int64                   `json:"historyRevision"`
+}
+
+// QueryFilteredChartWindowArgs requests a chart-only reconstruction from
+// historical trade reports. Exactly one explicit half-open UTC range is used;
+// the backend enforces a bounded lookback and accepts only 1m or 5m.
+type QueryFilteredChartWindowArgs struct {
+	Symbol       string  `json:"symbol"`
+	Timeframe    string  `json:"timeframe"`
+	FromMs       int64   `json:"fromMs"`
+	ToMs         int64   `json:"toMs"`
+	AnchorPrice  float64 `json:"anchorPrice,omitempty"`
+	AnchorTimeMs int64   `json:"anchorTimeMs,omitempty"`
+	LocalOnly    bool    `json:"localOnly,omitempty"`
+}
+
+type FilteredChartDiagnostics struct {
+	AlpacaFeed                   string   `json:"alpacaFeed,omitempty"`
+	AlpacaInputReports           int64    `json:"alpacaInputReports"`
+	LocalInputReports            int64    `json:"localInputReports"`
+	SelectedAlpacaReports        int64    `json:"selectedAlpacaReports"`
+	SelectedLocalReports         int64    `json:"selectedLocalReports"`
+	CoverageMinutes              int      `json:"coverageMinutes"`
+	CompleteAlpacaMinutes        int      `json:"completeAlpacaMinutes"`
+	TickStoreMinutes             int      `json:"tickStoreMinutes"`
+	PartialAlpacaMinutes         int      `json:"partialAlpacaMinutes"`
+	EmptyMinutes                 int      `json:"emptyMinutes"`
+	LocalCoverageUnproven        bool     `json:"localCoverageUnproven"`
+	LocalCoverageReasons         []string `json:"localCoverageReasons"`
+	AlpacaRecencyClamped         bool     `json:"alpacaRecencyClamped"`
+	AlpacaLatencyRuleUnavailable bool     `json:"alpacaLatencyRuleUnavailable"`
+	AlpacaUnsupportedFeed        bool     `json:"alpacaUnsupportedFeed"`
+	PotentialCrossFeedHits       int      `json:"potentialCrossFeedHits"`
+	Errors                       []string `json:"errors"`
+}
+
+type QueryFilteredChartWindowResult struct {
+	Symbol      string                   `json:"symbol"`
+	Timeframe   string                   `json:"timeframe"`
+	FromMs      int64                    `json:"fromMs"`
+	ToMs        int64                    `json:"toMs"`
+	Bars        []Bar                    `json:"bars"`
+	Diagnostics FilteredChartDiagnostics `json:"diagnostics"`
+	Error       string                   `json:"error,omitempty"`
 }
 
 type QueryVolumeProfileArgs struct {

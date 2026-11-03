@@ -39,8 +39,10 @@ export function paintTape(ctx: CanvasRenderingContext2D, s: TapePaintState): voi
     // full-row tint background — market direction, not app state, hence the
     // up/down/neutral flash tokens rather than a bronze/status color.
     ctx.fillStyle = exceptional
-      ? r.direction === "BUY" ? p.flashBuyStrong : r.direction === "SELL" ? p.flashSellStrong : p.flashNeutralStrong
-      : r.direction === "BUY" ? p.flashBuy : r.direction === "SELL" ? p.flashSell : p.flashNeutral;
+      ? r.direction === "BUY" ? p.flashBuyStrong
+        : r.direction === "SELL" ? p.flashSellStrong
+        : p.flashNeutralStrong
+      : p.bg;
     ctx.fillRect(0, top, s.width, TAPE_ROW_H);
     if (exceptional) {
       ctx.fillStyle = dir;

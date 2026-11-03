@@ -24,7 +24,14 @@ is introduced.
   configured Alpaca adapter loads its active asset directory concurrently at engine
   startup with `GET /v2/assets?status=active`, without blocking pollers; Stock Info uses in-memory
   lookups for the rest of the process. Paper credentials may also provide
-  daily and one-minute history; live credentials are not reused for history.
+  daily and one-minute history plus individual historical trade reports; live
+  credentials are not reused for history. Historical SIP trade queries are
+  clamped to `now - 16m` for the Basic-plan 15-minute recency boundary. The
+  trade-history service reads captured OpenD prints from TickStore in parallel
+  and reports source counts, time coverage, capture caveats, and possible
+  cross-provider matches without merging or silently dropping overlapping
+  prints. See [history provider](../engine/internal/hist/alpaca/README.md) and
+  [trade history](../engine/internal/hist/tradehistory/README.md).
   Alpaca SIP raw daily history also supplies the Scanner's process-local
   up-to-50-day REL VOL baselines when configured; IEX and unavailable clients
   leave that column unavailable. See [adapter](../engine/internal/broker/alpaca/README.md)
