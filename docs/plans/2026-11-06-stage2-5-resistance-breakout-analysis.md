@@ -20,7 +20,7 @@ File: \`ui/src/strategy/candidateTechnicalAnalysis.ts\`
 - Only completed daily candles before the current ET calendar date are considered. Current-day and in-progress daily candles are excluded.
 - The detector examines up to the latest 60 completed daily sessions.
 - It identifies confirmed daily swing highs using two candles on either side, and also includes the prior 20-day high as a resistance level.
-- It selects the nearest resistance level strictly above the current price.
+- It selects the nearest resistance level at or above the current price.
 - A level within 3% above the current price is marked as nearby and fails the existing no-nearby-resistance eligibility check.
 - No overhead level above the current price, or a nearest level more than 3% away, passes that check.
 - Fewer than 20 completed daily candles, invalid price/time, or otherwise insufficient evidence leaves the check unknown/PENDING.
