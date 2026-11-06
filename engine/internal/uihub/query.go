@@ -48,14 +48,14 @@ type queries struct {
 	charts interface {
 		QueryChartWindow(wsmsg.QueryChartWindowArgs) wsmsg.QueryChartWindowResult
 	}
-	clk             clock.Clock
-	locates         LocateRegistry
-	preview         eligiblePrintPreviewer
-	profileReader        *tickstore.ProfileReader
-	profileSlots         chan struct{}
-	candidateHistory     candidateHistoryReader
+	clk                   clock.Clock
+	locates               LocateRegistry
+	preview               eligiblePrintPreviewer
+	profileReader         *tickstore.ProfileReader
+	profileSlots          chan struct{}
+	candidateHistory      candidateHistoryReader
 	candidateHistorySlots chan struct{}
-	filteredHistory      interface {
+	filteredHistory       interface {
 		Fetch(context.Context, string, time.Time, time.Time) (tradehistory.Result, error)
 		FetchLocal(context.Context, string, time.Time, time.Time) (tradehistory.Result, error)
 	}
