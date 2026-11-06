@@ -4,6 +4,7 @@ import { useTheme } from "../ThemeProvider";
 import type { Palette } from "../../render/palette";
 import { evaluateRossMomentumCandidate, type CandidateEligibilityResult } from "../../strategy/candidateEligibility";
 import type { MomentumScannerCandidate } from "../../data/ScannerStore";
+import type { Bar } from "../../wire/contract";
 
 const MAX_ANALYSIS_1M_BARS = 12_000;
 const MAX_ANALYSIS_DAILY_BARS = 260;
@@ -11,6 +12,20 @@ const MAX_ANALYSIS_DAILY_BARS = 260;
 interface EvaluatedCandidate {
   candidate: MomentumScannerCandidate;
   result: CandidateEligibilityResult;
+}
+
+interface CandidateHistoryData {
+  oneMinuteBars: Bar[];
+  dailyBars: Bar[];
+  error: string | null;
+  loadedAtMs: number;
+}
+
+interface CandidateHistoryPayload {
+  symbol: string;
+  oneMinuteBars?: Bar[];
+  dailyBars?: Bar[];
+  error?: string;
 }
 
 function positive(value: number | null | undefined): number | null {
@@ -43,9 +58,20 @@ function checkColor(state: "pass" | "fail" | "unknown", palette: Palette): strin
   return palette.textMuted;
 }
 
-export function RossCandidatesPanel({ stores }: PanelProps): JSX.Element {
+
+function chartOneMinuteCount(stores: PanelProps["stores"], symbol: string): string {
+  return stores.bars.latestBar(symbol, "1m") ? "chart loaded" : "not loaded";
+}
+
+function chartDailyCount(stores: PanelProps["stores"], symbol: string): string {
+  return stores.bars.latestBar(symbol, "D") ? "chart loaded" : "not loaded";
+}
+
+export function RossCandidatesPanel({ stores, commands }: PanelProps): JSX.Element {
   const { palette } = useTheme();
   const [revision, setRevision] = useState(1);
+  const [historyBySymbol, setHistoryBySymbol] = useState<Record<string, CandidateHistoryData>>({});
+  const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
 
   // Scanner, quote, chart, fundamentals and news are independent stores.
   // Coalesce their updates so one burst only re-runs the candidate evaluator
@@ -74,6 +100,40 @@ export function RossCandidatesPanel({ stores }: PanelProps): JSX.Element {
     };
   }, [stores]);
 
+  const loadArchivedHistory = async (symbol: string) => {
+    if (historyLoading[symbol]) return;
+    setHistoryLoading((current) => ({ ...current, [symbol]: true }));
+    try {
+      const raw = await commands.sendQuery("QueryCandidateHistory", { symbol });
+      if (raw === null || typeof raw !== "object") throw new Error("The engine returned an invalid history response.");
+      const response = raw as CandidateHistoryPayload;
+      if (response.symbol !== symbol || !Array.isArray(response.oneMinuteBars) || !Array.isArray(response.dailyBars)) {
+        throw new Error("The engine returned an incomplete history response.");
+      }
+      setHistoryBySymbol((current) => ({
+        ...current,
+        [symbol]: {
+          oneMinuteBars: response.oneMinuteBars!,
+          dailyBars: response.dailyBars!,
+          error: response.error || null,
+          loadedAtMs: Date.now(),
+        },
+      }));
+    } catch (error) {
+      setHistoryBySymbol((current) => ({
+        ...current,
+        [symbol]: {
+          oneMinuteBars: current[symbol]?.oneMinuteBars ?? [],
+          dailyBars: current[symbol]?.dailyBars ?? [],
+          error: error instanceof Error ? error.message : "History query failed.",
+          loadedAtMs: current[symbol]?.loadedAtMs ?? 0,
+        },
+      }));
+    } finally {
+      setHistoryLoading((current) => ({ ...current, [symbol]: false }));
+    }
+  };
+
   const evaluated = useMemo<EvaluatedCandidate[]>(() => {
     const asOfMs = Date.now();
     return stores.scanner.momentumCandidates().map((candidate) => {
@@ -85,12 +145,19 @@ export function RossCandidatesPanel({ stores }: PanelProps): JSX.Element {
 
       const latest1m = stores.bars.latestBar(symbol, "1m");
       const latestDaily = stores.bars.latestBar(symbol, "D");
-      const oneMinuteBars = latest1m
+      const chartOneMinuteBars = latest1m
         ? stores.bars.tailSeries(symbol, "1m", MAX_ANALYSIS_1M_BARS)
         : [];
-      const dailyBars = latestDaily
+      const chartDailyBars = latestDaily
         ? stores.bars.tailSeries(symbol, "D", MAX_ANALYSIS_DAILY_BARS)
         : [];
+      const archived = historyBySymbol[symbol];
+      const oneMinuteBars = archived?.oneMinuteBars.length
+        ? archived.oneMinuteBars
+        : chartOneMinuteBars;
+      const dailyBars = archived?.dailyBars.length
+        ? archived.dailyBars
+        : chartDailyBars;
       const hasNewsCatalyst = stores.news.itemsFor(symbol).some(
         (item) => item.catalyst_score >= 50 && item.catalyst_category !== "other",
       );
@@ -113,7 +180,7 @@ export function RossCandidatesPanel({ stores }: PanelProps): JSX.Element {
       });
       return { candidate, result };
     });
-  }, [revision, stores]);
+  }, [revision, stores, historyBySymbol]);
 
   const counts = useMemo(() => ({
     eligible: evaluated.filter((item) => item.result.status === "ELIGIBLE").length,
@@ -173,9 +240,22 @@ export function RossCandidatesPanel({ stores }: PanelProps): JSX.Element {
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginBottom: 8 }}>
                   <div><div style={{ color: palette.textMuted, fontSize: 9 }}>Moomoo OS proxy</div><div className="mono">{shares(result.metrics.floatShares)}</div></div>
-                  <div><div style={{ color: palette.textMuted, fontSize: 9 }}>1m candles</div><div className="mono">{stores.bars.latestBar(candidate.symbol, "1m") ? "loaded" : "not loaded"}</div></div>
-                  <div><div style={{ color: palette.textMuted, fontSize: 9 }}>Daily candles</div><div className="mono">{stores.bars.latestBar(candidate.symbol, "D") ? "loaded" : "not loaded"}</div></div>
+                  <div><div style={{ color: palette.textMuted, fontSize: 9 }}>1m candles</div><div className="mono">{historyBySymbol[candidate.symbol]?.oneMinuteBars.length ?? chartOneMinuteCount(stores, candidate.symbol)}</div></div>
+                  <div><div style={{ color: palette.textMuted, fontSize: 9 }}>Daily candles</div><div className="mono">{historyBySymbol[candidate.symbol]?.dailyBars.length ?? chartDailyCount(stores, candidate.symbol)}</div></div>
                 </div>
+                <button
+                  type="button"
+                  disabled={historyLoading[candidate.symbol] === true}
+                  onClick={() => void loadArchivedHistory(candidate.symbol)}
+                  style={{ border: "1px solid " + palette.borderStrong, background: palette.surface, color: palette.text, padding: "5px 8px", fontSize: 10, cursor: historyLoading[candidate.symbol] ? "wait" : "pointer", opacity: historyLoading[candidate.symbol] ? 0.6 : 1, marginBottom: 8 }}
+                >
+                  {historyLoading[candidate.symbol] ? "Loading archived bars…" : historyBySymbol[candidate.symbol] ? "Refresh archived bars" : "Load archived bars"}
+                </button>
+                {historyBySymbol[candidate.symbol]?.error && (
+                  <div style={{ color: palette.accent, fontSize: 10, lineHeight: 1.4, marginBottom: 7 }}>
+                    Archive notice: {historyBySymbol[candidate.symbol]!.error}
+                  </div>
+                )}
                 <div style={{ color: palette.textMuted, fontSize: 9, letterSpacing: ".05em", marginBottom: 3 }}>ELIGIBILITY CHECKS</div>
                 {result.checks.map((check) => (
                   <div key={check.id} style={{ display: "grid", gridTemplateColumns: "minmax(110px, .7fr) minmax(0, 1.5fr) auto", gap: 7, padding: "4px 0", borderTop: "1px solid " + palette.border, alignItems: "start" }}>
@@ -196,7 +276,7 @@ export function RossCandidatesPanel({ stores }: PanelProps): JSX.Element {
       )}
 
       <div style={{ padding: "8px 10px", borderTop: "1px solid " + palette.borderStrong, color: palette.textMuted, fontSize: 10, lineHeight: 1.45 }}>
-        Moomoo OutstandingShares remains an unverified proxy, so it cannot pass the free-float check. Scanner archive warming does not yet populate the UI chart store for every candidate; missing one-minute or daily candles stay PENDING. Nearby resistance and technical-breakout detection are also not connected yet. This panel is informational and never places orders.
+        Moomoo OutstandingShares remains an unverified proxy, so it cannot pass the free-float check. Expand a candidate and load its already-archived one-minute and daily bars on demand; this does not open a chart subscription. Nearby resistance and technical-breakout detection are not connected yet. This panel is informational and never places orders.
       </div>
     </div>
   );
