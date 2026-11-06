@@ -126,3 +126,16 @@ describe("panel minimum widths", () => {
     expect(PANELS.tape.minimumWidth).toBe(TAPE_MIN_WIDTH);
   });
 });
+
+
+describe("Ross Candidates panel", () => {
+  it("subscribes to merged discovery and read-only eligibility inputs", () => {
+    expect(PANELS["ross-candidates"]).toBeDefined();
+    expect(PANELS["ross-candidates"].topics).toEqual([
+      "scanner.rank", "md.quote", "md.bars", "stock.detail", "news.item",
+    ]);
+    expect(PANELS["ross-candidates"].symbolBearing).toBe(false);
+    expect(PANELS["ross-candidates"].demand).toBeUndefined();
+    expect(CATALOG.map((panel) => panel.panelId)).toContain("ross-candidates");
+  });
+});
