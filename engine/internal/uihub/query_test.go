@@ -100,9 +100,9 @@ func TestQueryCandidateHistoryReadsBoundedLocalArchive(t *testing.T) {
 
 func TestQueryCandidateHistoryReturnsPartialArchiveErrors(t *testing.T) {
 	archive := &spyCandidateHistory{
-		spyFills: &spyFills{},
+		spyFills:  &spyFills{},
 		oneMinute: []feed.Bar{{BucketMs: 1000, C: 1}},
-		dailyErr: errors.New("daily database unavailable"),
+		dailyErr:  errors.New("daily database unavailable"),
 	}
 	q := newQueries(archive, clock.NewFake(time.Now()))
 	out := q.handle("QueryCandidateHistory", json.RawMessage(`{"symbol":"US.TEST"}`))
