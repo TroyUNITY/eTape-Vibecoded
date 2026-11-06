@@ -11,6 +11,7 @@ import (
 	"github.com/earlisreal/eTape/engine/internal/buildinfo"
 	"github.com/earlisreal/eTape/engine/internal/clock"
 	"github.com/earlisreal/eTape/engine/internal/exec"
+	"github.com/earlisreal/eTape/engine/internal/feed"
 	"github.com/earlisreal/eTape/engine/internal/hist/tradehistory"
 	"github.com/earlisreal/eTape/engine/internal/locates"
 	"github.com/earlisreal/eTape/engine/internal/session"
@@ -32,6 +33,28 @@ type eligiblePrintPreviewer interface {
 	PreviewEligiblePrint(context.Context, string) exec.EligiblePrintPreview
 }
 
+type candidateHistoryReader interface {
+	ReadRecentBars1m(symbol string, limit int) ([]feed.Bar, error)
+	ReadRecentDailyBars(symbol string, limit int) ([]feed.Bar, error)
+}
+
+type candidateHistoryArgs struct {
+	Symbol string `json:"symbol"`
+}
+
+type candidateHistoryResult struct {
+	Symbol        string     `json:"symbol"`
+	AsOfMs        int64      `json:"asOfMs"`
+	OneMinuteBars []wsmsg.Bar `json:"oneMinuteBars"`
+	DailyBars     []wsmsg.Bar `json:"dailyBars"`
+	Error         string     `json:"error,omitempty"`
+}
+
+const (
+	candidateHistoryOneMinuteLimit = 15000
+	candidateHistoryDailyLimit     = 260
+)
+
 type queries struct {
 	fills  fillsQuerier
 	charts interface {
@@ -40,9 +63,11 @@ type queries struct {
 	clk             clock.Clock
 	locates         LocateRegistry
 	preview         eligiblePrintPreviewer
-	profileReader   *tickstore.ProfileReader
-	profileSlots    chan struct{}
-	filteredHistory interface {
+	profileReader        *tickstore.ProfileReader
+	profileSlots         chan struct{}
+	candidateHistory     candidateHistoryReader
+	candidateHistorySlots chan struct{}
+	filteredHistory      interface {
 		Fetch(context.Context, string, time.Time, time.Time) (tradehistory.Result, error)
 		FetchLocal(context.Context, string, time.Time, time.Time) (tradehistory.Result, error)
 	}
@@ -73,7 +98,13 @@ type venueEligibilityCall struct {
 func newQueries(f fillsQuerier, clk clock.Clock, charts ...interface {
 	QueryChartWindow(wsmsg.QueryChartWindowArgs) wsmsg.QueryChartWindowResult
 }) *queries {
-	q := &queries{fills: f, clk: clk, profileSlots: make(chan struct{}, 2)}
+	q := &queries{
+		fills: f, clk: clk, profileSlots: make(chan struct{}, 2),
+		candidateHistorySlots: make(chan struct{}, 2),
+	}
+	if reader, ok := f.(candidateHistoryReader); ok {
+		q.candidateHistory = reader
+	}
 	if len(charts) > 0 {
 		q.charts = charts[0]
 	}
@@ -101,7 +132,7 @@ func (q *queries) handleAsync(ctx context.Context, name string, args json.RawMes
 
 func isAsyncQuery(name string) bool {
 	switch name {
-	case "QueryVolumeProfile", "QueryFilteredChartWindow", "QueryStopLimitRoute", "QueryVenueInstrumentEligibility", "QueryLocateEligibility", "QueryLocateQuotes", "QueryLocates", "QueryLocate":
+	case "QueryVolumeProfile", "QueryFilteredChartWindow", "QueryCandidateHistory", "QueryStopLimitRoute", "QueryVenueInstrumentEligibility", "QueryLocateEligibility", "QueryLocateQuotes", "QueryLocates", "QueryLocate":
 		return true
 	default:
 		return false
@@ -116,6 +147,8 @@ func (q *queries) handleContext(ctx context.Context, name string, args json.RawM
 		return wsmsg.AppInfo{Version: buildinfo.Version}
 	case "QueryFilteredChartWindow":
 		return q.filteredChartWindow(ctx, args)
+	case "QueryCandidateHistory":
+		return q.candidateHistoryWindow(ctx, args)
 	case "QueryChartWindow":
 		var a wsmsg.QueryChartWindowArgs
 		if json.Unmarshal(args, &a) != nil || q.charts == nil || a.Symbol == "" || a.Timeframe == "" || (a.TailBars > 0) == (a.FromMs < a.ToMs) {
@@ -286,6 +319,62 @@ func (q *queries) handleContext(ctx context.Context, name string, args json.RawM
 		return locateRecordToWire(record)
 	default:
 		return []any{}
+	}
+}
+
+// candidateHistoryWindow reads already-archived bars for one expanded
+// Ross candidate. It is deliberately query-on-demand (not a stream or chart
+// subscription) and bounded to the latest 15,000 one-minute + 260 daily bars.
+func (q *queries) candidateHistoryWindow(ctx context.Context, raw json.RawMessage) candidateHistoryResult {
+	var args candidateHistoryArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return candidateHistoryResult{OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: "invalid request"}
+	}
+	args.Symbol = strings.ToUpper(strings.TrimSpace(args.Symbol))
+	if args.Symbol == "" || len(args.Symbol) > 32 || strings.ContainsAny(args.Symbol, " \\t\\r\\n") {
+		return candidateHistoryResult{OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: "a valid symbol is required"}
+	}
+	if q.candidateHistory == nil {
+		return candidateHistoryResult{Symbol: args.Symbol, OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: "local candidate history is unavailable"}
+	}
+
+	select {
+	case q.candidateHistorySlots <- struct{}{}:
+		defer func() { <-q.candidateHistorySlots }()
+	case <-ctx.Done():
+		return candidateHistoryResult{Symbol: args.Symbol, OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: ctx.Err().Error()}
+	}
+
+	now := q.clk.Now()
+	out := candidateHistoryResult{
+		Symbol: args.Symbol, AsOfMs: now.UnixMilli(),
+		OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{},
+	}
+	oneMinute, oneErr := q.candidateHistory.ReadRecentBars1m(args.Symbol, candidateHistoryOneMinuteLimit)
+	daily, dailyErr := q.candidateHistory.ReadRecentDailyBars(args.Symbol, candidateHistoryDailyLimit)
+	for _, bar := range oneMinute {
+		out.OneMinuteBars = append(out.OneMinuteBars, candidateHistoryBarToWire(args.Symbol, "1m", bar))
+	}
+	for _, bar := range daily {
+		out.DailyBars = append(out.DailyBars, candidateHistoryBarToWire(args.Symbol, "D", bar))
+	}
+	if oneErr != nil {
+		out.Error = "one-minute archive: " + oneErr.Error()
+	}
+	if dailyErr != nil {
+		if out.Error != "" {
+			out.Error += "; "
+		}
+		out.Error += "daily archive: " + dailyErr.Error()
+	}
+	return out
+}
+
+func candidateHistoryBarToWire(symbol, timeframe string, bar feed.Bar) wsmsg.Bar {
+	return wsmsg.Bar{
+		Symbol: symbol, Timeframe: timeframe, BucketStart: isoMs(bar.BucketMs),
+		O: bar.O, H: bar.H, L: bar.L, C: bar.C, V: bar.Volume,
+		InProgress: false,
 	}
 }
 
