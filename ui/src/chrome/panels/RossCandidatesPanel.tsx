@@ -388,11 +388,11 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
         asOfMs,
         dailyBars,
         dailyChart: { nearbyResistance: technical.resistance.nearby },
+        // A confirmed breakout can substitute for a fundamental headline.
+        // No detected headline is not proof that no fundamental catalyst exists.
         catalyst: hasNewsCatalyst
           ? "fundamental"
-          : technical.breakout.detected === true
-            ? "technical_breakout"
-            : technical.breakout.detected === false ? "none" : "unknown",
+          : technical.breakout.detected === true ? "technical_breakout" : "unknown",
       });
       return {
         candidate,
