@@ -165,6 +165,44 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
     onConfigChange({ [RETAINED_CANDIDATES_SETTING]: next });
   }, [onConfigChange]);
 
+  const saveLiveMonitorSymbols = useCallback((next: string[]) => {
+    const normalized = readLiveMonitorSymbols(next, retainedCandidates);
+    setLiveMonitorSymbols(normalized);
+    onConfigChange({ [LIVE_MONITOR_SYMBOLS_SETTING]: normalized });
+  }, [onConfigChange, retainedCandidates]);
+
+  const startLiveMonitoring = useCallback((symbol: string) => {
+    if (!demandRegistry) {
+      setMonitorErrors((current) => ({ ...current, [symbol]: "Live monitoring is unavailable in this panel context." }));
+      return;
+    }
+    if (!retainedCandidates.some((item) => item.symbol === symbol)) return;
+    if (!symbol.startsWith("US.")) {
+      setMonitorErrors((current) => ({ ...current, [symbol]: "Live one-minute monitoring currently supports US symbols only." }));
+      return;
+    }
+    if (liveMonitorSymbols.includes(symbol)) return;
+    if (liveMonitorSymbols.length >= MAX_CANDIDATE_MONITOR_SYMBOLS) {
+      setMonitorErrors((current) => ({ ...current, [symbol]: `The live-monitor shortlist is limited to ${MAX_CANDIDATE_MONITOR_SYMBOLS} symbols.` }));
+      return;
+    }
+    setMonitorErrors((current) => {
+      const next = { ...current };
+      delete next[symbol];
+      return next;
+    });
+    saveLiveMonitorSymbols([...liveMonitorSymbols, symbol]);
+  }, [demandRegistry, retainedCandidates, liveMonitorSymbols, saveLiveMonitorSymbols]);
+
+  const stopLiveMonitoring = useCallback((symbol: string) => {
+    saveLiveMonitorSymbols(liveMonitorSymbols.filter((item) => item !== symbol));
+    setMonitorErrors((current) => {
+      const next = { ...current };
+      delete next[symbol];
+      return next;
+    });
+  }, [liveMonitorSymbols, saveLiveMonitorSymbols]);
+
   const keepCandidate = useCallback((candidate: MomentumScannerCandidate) => {
     if (retainedCandidates.some((item) => item.symbol === candidate.symbol) ||
       retainedCandidates.length >= MAX_RETAINED_CANDIDATES) return;
@@ -180,7 +218,57 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
   const removeRetainedCandidate = useCallback((symbol: string) => {
     if (!retainedCandidates.some((item) => item.symbol === symbol)) return;
     saveRetainedCandidates(retainedCandidates.filter((item) => item.symbol !== symbol));
-  }, [retainedCandidates, saveRetainedCandidates]);
+    saveLiveMonitorSymbols(liveMonitorSymbols.filter((item) => item !== symbol));
+  }, [retainedCandidates, liveMonitorSymbols, saveRetainedCandidates, saveLiveMonitorSymbols]);
+
+  // Reconcile one demand per selected candidate. DemandRegistry keeps the
+  // set reconnect-safe and releases every demand when this panel unmounts.
+  useEffect(() => {
+    if (!demandRegistry) return;
+    const desired = new Map(liveMonitorSymbols.map((symbol) => [
+      `ross-candidate:${config.id}:${symbol}`,
+      symbol,
+    ]));
+    for (const demandId of [...activeMonitorDemandIds.current]) {
+      if (desired.has(demandId)) continue;
+      demandRegistry.release(demandId);
+      activeMonitorDemandIds.current.delete(demandId);
+    }
+    for (const [demandId, symbol] of desired) {
+      if (activeMonitorDemandIds.current.has(demandId)) continue;
+      activeMonitorDemandIds.current.add(demandId);
+      void demandRegistry.ensure(demandId, symbol, "candidate").then((ack) => {
+        if (ack.status !== "accepted") {
+          setMonitorErrors((current) => ({ ...current, [symbol]: ack.reason ?? "The engine rejected this live-monitor demand." }));
+          return;
+        }
+        setMonitorErrors((current) => {
+          const next = { ...current };
+          delete next[symbol];
+          return next;
+        });
+      }).catch((error: unknown) => {
+        setMonitorErrors((current) => ({
+          ...current,
+          [symbol]: error instanceof Error ? error.message : "Live-monitor request failed.",
+        }));
+      });
+    }
+  }, [liveMonitorSymbols, config.id, demandRegistry]);
+
+  useEffect(() => () => {
+    if (!demandRegistry) return;
+    for (const demandId of activeMonitorDemandIds.current) demandRegistry.release(demandId);
+    activeMonitorDemandIds.current.clear();
+  }, [demandRegistry]);
+
+  // A retained candidate that is explicitly removed or automatically rejected
+  // must not keep consuming a live-monitor slot.
+  useEffect(() => {
+    const retainedSymbols = new Set(retainedCandidates.map((item) => item.symbol));
+    const next = liveMonitorSymbols.filter((symbol) => retainedSymbols.has(symbol));
+    if (next.length !== liveMonitorSymbols.length) saveLiveMonitorSymbols(next);
+  }, [retainedCandidates, liveMonitorSymbols, saveLiveMonitorSymbols]);
 
   // Scanner, quote, chart, fundamentals and news are independent stores.
   // Coalesce their updates so one burst only re-runs the candidate evaluator
