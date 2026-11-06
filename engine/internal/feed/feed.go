@@ -256,9 +256,10 @@ func ChartDemand(id, symbol string) Demand {
 // update cannot delay interactive chart preparation.
 func MomentumCandidateDemand(id, symbol string) Demand {
 	return Demand{
-		ID: id, Symbol: symbol,
-		Subs: []SubType{SubTicker, SubKL1m},
-		WantsHistory: true,
+		ID:             id,
+		Symbol:         symbol,
+		Subs:           []SubType{SubTicker, SubKL1m},
+		WantsHistory:   true,
 		BackgroundSeed: true,
 	}
 }
