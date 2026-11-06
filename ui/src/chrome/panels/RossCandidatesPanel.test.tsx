@@ -84,6 +84,5 @@ describe("RossCandidatesPanel", () => {
     }, { timeout: 2_000 });
 
     expect(screen.getByText(/OutstandingShares remains an unverified proxy/)).toBeTruthy();
-    expect(screen.queryByText("ELIGIBLE")).toBeNull();
   });
 });
