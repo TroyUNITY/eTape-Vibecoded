@@ -12,7 +12,7 @@ export interface MomentumScannerCandidate extends ScannerRowView {
   sourceModes: MomentumScannerMode[];
   scannerIds: string[];
   session: ScannerSession;
-  refreshedAt: string;
+  refreshedAt: string | null;
 }
 const LEGACY_SCANNER = "legacy";
 
