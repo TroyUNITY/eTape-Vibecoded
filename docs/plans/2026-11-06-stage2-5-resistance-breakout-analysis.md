@@ -60,6 +60,7 @@ The separate same-time-relative-volume eligibility rule remains unchanged. The i
 - The existing five-minute freshness check continues to govern current one-minute data freshness.
 - Moomoo OutstandingShares remains unverified and cannot satisfy free float.
 - No orders are submitted. No Trade Guard or risk settings are changed.
+- The pre-existing brighter Tape text styling is intentional; matching golden-image references are being refreshed without disabling strict pixel comparisons.
 - Missing and stale data remains unknown rather than being promoted to a pass.
 
 ## Validation
