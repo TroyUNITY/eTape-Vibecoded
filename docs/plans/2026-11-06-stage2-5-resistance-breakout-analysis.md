@@ -45,9 +45,9 @@ The 20-bar lookback and 2.0x volume confirmation are eTape implementation heuris
 ## Candidate eligibility integration
 
 - A qualifying fundamental/news catalyst continues to satisfy the catalyst check.
-- When no qualifying fundamental catalyst exists, a confirmed technical breakout can satisfy the catalyst check.
-- When current-session data is sufficient and no breakout is confirmed, the technical-catalyst state is none/fail.
-- When current-session data is missing, stale, or insufficient, the technical-catalyst state remains unknown/PENDING.
+- When no qualifying fundamental catalyst has been identified, a confirmed technical breakout can satisfy the catalyst check.
+- When current-session data is sufficient and no breakout is confirmed, the breakout evidence is explicitly negative, but the overall catalyst check remains unknown because absence of a qualifying headline is not proof that no fundamental catalyst exists.
+- When current-session data is missing, stale, or insufficient, the breakout evidence and overall catalyst check remain unknown/PENDING.
 - Nearby resistance is now populated from the daily resistance assessment. The eligibility evaluator remains fail-closed when resistance evidence is unknown.
 - The panel displays the nearest resistance price and distance, plus the breakout state, reference high, close and volume multiple in the detector's explanatory detail.
 
