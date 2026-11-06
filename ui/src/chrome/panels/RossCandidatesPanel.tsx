@@ -357,9 +357,11 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
         ? stores.bars.tailSeries(symbol, "D", MAX_ANALYSIS_DAILY_BARS)
         : [];
       const archived = historyBySymbol[symbol];
-      const oneMinuteBars = archived?.oneMinuteBars.length
-        ? archived.oneMinuteBars
-        : chartOneMinuteBars;
+      const oneMinuteBars = mergeOneMinuteBars(
+        archived?.oneMinuteBars ?? [],
+        chartOneMinuteBars,
+        MAX_ANALYSIS_1M_BARS,
+      );
       const dailyBars = archived?.dailyBars.length
         ? archived.dailyBars
         : chartDailyBars;
@@ -383,9 +385,15 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
         // technical-breakout detector has not yet been integrated.
         catalyst: hasNewsCatalyst ? "fundamental" : "unknown",
       });
-      return { candidate, result, retained, currentlyDiscovered };
+      return {
+        candidate,
+        result,
+        retained,
+        currentlyDiscovered,
+        liveMonitoringRequested: liveMonitorSymbols.includes(symbol),
+      };
     });
-  }, [revision, stores, historyBySymbol, retainedCandidates]);
+  }, [revision, stores, historyBySymbol, retainedCandidates, liveMonitorSymbols]);
 
   // An ELIGIBLE candidate is retained automatically. A previously retained
   // candidate survives temporary PENDING states (for example stale or missing
