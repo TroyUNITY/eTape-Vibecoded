@@ -66,6 +66,7 @@ No provider key, paid subscription, licensing agreement, or provider adapter has
 - Scanner aggregation tests cover source merging, symbol deduplication, newest-row selection, Losers exclusion, freshest-session selection, and delayed-board handling.
 - UI tests cover pending status with Moomoo-only float evidence and the on-demand history action.
 - UIHub tests cover bounded archive reads, symbol normalization, partial archive failures, missing archive capability, and asynchronous query routing.
+- The new history-query request/result DTOs are generated from `wsmsg/payloads.go` and included in the `gen-ts-check` contract drift gate.
 - Full UI lint, test, and build validation plus engine tests and contract-drift validation must pass in CI before this stage is considered complete.
 
 ## First-run operator checklist
