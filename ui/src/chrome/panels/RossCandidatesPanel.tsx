@@ -481,7 +481,7 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
         </div>
       ) : (
         <div style={{ padding: "4px 8px 8px" }}>
-          {evaluated.map(({ candidate, result, retained, currentlyDiscovered, liveMonitoringRequested }) => (
+          {evaluated.map(({ candidate, result, technical, retained, currentlyDiscovered, liveMonitoringRequested }) => (
             <details key={candidate.symbol} style={{ borderBottom: "1px solid " + palette.border }}>
               <summary style={{ display: "grid", gridTemplateColumns: "minmax(70px, 1fr) minmax(50px, auto) minmax(50px, auto) auto", alignItems: "center", gap: 8, padding: "9px 3px", cursor: "pointer", listStylePosition: "inside" }}>
                 <span className="mono" style={{ fontWeight: 700, minWidth: 0 }}>{candidate.symbol}</span>
