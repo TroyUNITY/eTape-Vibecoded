@@ -331,7 +331,7 @@ func (q *queries) candidateHistoryWindow(ctx context.Context, raw json.RawMessag
 		return candidateHistoryResult{OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: "invalid request"}
 	}
 	args.Symbol = strings.ToUpper(strings.TrimSpace(args.Symbol))
-	if args.Symbol == "" || len(args.Symbol) > 32 || strings.ContainsAny(args.Symbol, " \\t\\r\\n") {
+	if args.Symbol == "" || len(args.Symbol) > 32 || strings.IndexFunc(args.Symbol, func(r rune) bool { return r <= ' ' }) >= 0 {
 		return candidateHistoryResult{OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: "a valid symbol is required"}
 	}
 	if q.candidateHistory == nil {
