@@ -406,7 +406,7 @@ export function ScannerPanel(
       <div data-testid="strategy-scanner-coverage" className="mono"
         title="Strategy Scanner reuses eTape's existing provider candidate feed. It is not an exhaustive scan of every US-listed stock. Up to 30 highest-ranked candidates are evaluated, and a fresh one-minute history is required; candidates without it remain Unknown."
         style={{ padding: "3px 8px", color: palette.textMuted, borderBottom: `1px solid ${palette.border}` }}>
-        Trade Guard · 5s refresh · up to 30 provider candidates · not all US stocks
+        {`Trade Guard · 5s refresh · up to ${STRATEGY_SCANNER_MAX_CANDIDATES} provider candidates · not all US stocks`}
       </div>
       {cv.status === "delayed" && <div role="status" className="mono" style={{ padding: "3px 8px", color: palette.textMuted, borderBottom: `1px solid ${palette.border}` }}>Data delayed · shared request budget</div>}
       {cv.status === "paused" && <div role="status" className="mono" style={{ padding: "3px 8px", color: palette.textMuted, borderBottom: `1px solid ${palette.border}` }}>Scanner paused · workspace closed</div>}
