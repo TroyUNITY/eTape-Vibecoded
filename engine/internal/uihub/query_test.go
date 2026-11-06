@@ -76,9 +76,9 @@ func TestQueryCandidateHistoryReadsBoundedLocalArchive(t *testing.T) {
 	}
 	q := newQueries(archive, clock.NewFake(now))
 	out := q.handleContext(context.Background(), "QueryCandidateHistory", json.RawMessage(`{"symbol":" us.test "}`))
-	result, ok := out.(candidateHistoryResult)
+	result, ok := out.(wsmsg.QueryCandidateHistoryResult)
 	if !ok {
-		t.Fatalf("expected candidateHistoryResult, got %T", out)
+		t.Fatalf("expected wsmsg.QueryCandidateHistoryResult, got %T", out)
 	}
 	if result.Symbol != "US.TEST" || result.AsOfMs != now.UnixMilli() {
 		t.Fatalf("query metadata = %+v", result)
@@ -107,7 +107,7 @@ func TestQueryCandidateHistoryReturnsPartialArchiveErrors(t *testing.T) {
 	}
 	q := newQueries(archive, clock.NewFake(time.Now()))
 	out := q.handle("QueryCandidateHistory", json.RawMessage(`{"symbol":"US.TEST"}`))
-	result := out.(candidateHistoryResult)
+	result := out.(wsmsg.QueryCandidateHistoryResult)
 	if len(result.OneMinuteBars) != 1 || len(result.DailyBars) != 0 ||
 		!strings.Contains(result.Error, "daily database unavailable") {
 		t.Fatalf("partial archive result = %+v", result)
@@ -117,7 +117,7 @@ func TestQueryCandidateHistoryReturnsPartialArchiveErrors(t *testing.T) {
 func TestQueryCandidateHistoryFailsClosedWithoutArchiveReader(t *testing.T) {
 	q := newQueries(&spyFills{}, clock.NewFake(time.Now()))
 	out := q.handle("QueryCandidateHistory", json.RawMessage(`{"symbol":"US.TEST"}`))
-	result := out.(candidateHistoryResult)
+	result := out.(wsmsg.QueryCandidateHistoryResult)
 	if result.Error == "" || len(result.OneMinuteBars) != 0 || len(result.DailyBars) != 0 {
 		t.Fatalf("archive reader absence must be explicit: %+v", result)
 	}
@@ -127,7 +127,7 @@ func TestQueryCandidateHistoryRejectsInvalidSymbol(t *testing.T) {
 	archive := &spyCandidateHistory{spyFills: &spyFills{}}
 	q := newQueries(archive, clock.NewFake(time.Now()))
 	out := q.handle("QueryCandidateHistory", json.RawMessage(`{"symbol":"US. TEST"}`))
-	result := out.(candidateHistoryResult)
+	result := out.(wsmsg.QueryCandidateHistoryResult)
 	if result.Error == "" || archive.symbol != "" {
 		t.Fatalf("invalid symbol reached archive reader: %+v", result)
 	}
