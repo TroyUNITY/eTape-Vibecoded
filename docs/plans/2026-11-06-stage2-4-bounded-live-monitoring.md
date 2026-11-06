@@ -50,7 +50,7 @@ The cap of five unique symbols is per WebSocket connection. Actual provider subs
 - DemandRegistry tests verify five unique symbols, duplicate-symbol deduplication, release of capacity, and reservation while acknowledgements are pending.
 - Ross Candidates panel tests verify selection persistence, candidate demand creation, receipt of a fresh one-minute bar, and demand release on unmount.
 - Existing Stage 2.1 eligibility, Stage 2.2 scanner aggregation/archive query, and Stage 2.3 retention tests remain in the strategy test project.
-- Full Go test/race/vet/lint/contract checks and UI lint/test/build should be rerun in CI. Existing unrelated tape golden-image comparisons and the LadderPanel timing issue are tracked separately.
+- Full Go test/race/vet/lint/contract checks and UI lint/test/build should be rerun in CI. The tape golden references are being refreshed for the previously intentional brighter text styling; strict pixel comparisons will remain enabled against the updated references. The unrelated LadderPanel timing issue is tracked separately.
 
 ## Operator checklist
 
