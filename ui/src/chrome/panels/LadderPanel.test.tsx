@@ -109,7 +109,7 @@ describe("LadderPanel", () => {
     expect(surface().isDirty()).toBe(true);
     surface().paint();
     expect(lastPaintedOffset()).toBeGreaterThan(0);
-  }, 15_000);;
+  }, 15_000);
 
   it("resets the painted row offset when switching symbols after a deep scroll", () => {
     const { stores, surface, linkGroups, container } = renderLadder({ symbol: "US.AAPL", levels: 60 }, 256);
