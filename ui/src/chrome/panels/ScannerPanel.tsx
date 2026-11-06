@@ -7,7 +7,7 @@ import { FONTS } from "../../render/palette";
 import { formatPrice, formatTapeTime, quoteDecimals } from "../../render/format";
 import { appendSsrMarker, formatChangePct, formatCompactShares, formatDollarTurnover, formatRelativeVolume, formatShortInterest, msUntilEtMidnight } from "../format";
 import { formatFilterSummary } from "./scannerFilter";
-import { toggleSort, sortIndicator, type SortState } from "../sortColumns";
+import { sortRows, toggleSort, sortIndicator, type SortState } from "../sortColumns";
 import { bareSymbol } from "../exec/orderStatus";
 import { Button } from "../controls/Button";
 import { useDismissibleLayer } from "../controls/useDismissibleLayer";
@@ -15,15 +15,26 @@ import { TVContextMenu, type MenuEntry } from "./tv/TVContextMenu";
 import { menuChrome } from "../menuChrome";
 import { PanelHeaderSlotContext } from "./headerSlot";
 import { IconGear, IconVolume, IconVolumeOff } from "./tv/tvIcons";
-import { rankScannerRows, readScannerSort, scannerModeSort, scannerSyncStatusText } from "../scannerSync";
+import { readScannerSort, scannerModeSort, scannerSortAccessors, scannerSyncStatusText } from "../scannerSync";
 import { focusMainWorkspace } from "../windows";
 import { soundEngine } from "../../sound/SoundEngine";
 import { DEFAULT_SCANNER_FILTERS, scannerFiltersFromSettings } from "../scannerFilters";
+import {
+  DEFAULT_STRATEGY_SCANNER_FILTERS,
+  STRATEGY_SCANNER_MAX_CANDIDATES,
+  StrategyScannerRuntime,
+  matchesStrategyScannerFilters,
+  readStrategyScannerFilters,
+  strategyQualityLabel,
+  strategyStatusLabel,
+  unknownStrategyScannerRow,
+  type StrategyScannerRow,
+} from "../../strategy/strategyScanner";
 
 const SESSION_LABEL: Record<ScannerSession, string> = {
   premarket: "Pre-market", rth: "RTH", afterhours: "After-hours", overnight: "Overnight",
 };
-type ScannerColumn = "sym" | "changePct" | "last" | "float" | "relVol" | "vol" | "sessionVol" | "turnover" | "shortInterest";
+type ScannerColumn = "sym" | "changePct" | "last" | "float" | "relVol" | "vol" | "sessionVol" | "turnover" | "shortInterest" | "strategySetup" | "strategyStatus" | "strategyQuality";
 type MetricColumn = Exclude<ScannerColumn, "sym">;
 type ColumnSettings = { order: MetricColumn[]; hidden: MetricColumn[] };
 const METRIC_COLUMNS: { col: MetricColumn; label: string; align: "right" }[] = [
@@ -35,12 +46,19 @@ const METRIC_COLUMNS: { col: MetricColumn; label: string; align: "right" }[] = [
   { col: "sessionVol", label: "Session Vol", align: "right" },
   { col: "turnover", label: "Turnover", align: "right" },
   { col: "shortInterest", label: "Short Int", align: "right" },
+  { col: "strategySetup", label: "Setup", align: "right" },
+  { col: "strategyStatus", label: "Status", align: "right" },
+  { col: "strategyQuality", label: "Quality", align: "right" },
 ];
 const DEFAULT_COLUMN_ORDER: MetricColumn[] = METRIC_COLUMNS.map(({ col }) => col);
 const SYMBOL_COLUMN = { col: "sym" as const, label: "Symbol", align: "left" as const };
 
 const isMetricColumn = (value: unknown): value is MetricColumn =>
   typeof value === "string" && DEFAULT_COLUMN_ORDER.includes(value as MetricColumn);
+
+function strategyForRow(analysis: ReadonlyMap<string, StrategyScannerRow>, symbol: string): StrategyScannerRow {
+  return analysis.get(symbol) ?? unknownStrategyScannerRow(symbol, "Waiting for the next five-second Strategy Scanner refresh.");
+}
 
 function readColumnSettings(settings: Record<string, unknown>): ColumnSettings {
   const raw = settings.scannerColumns as { order?: unknown; hidden?: unknown } | undefined;
@@ -88,10 +106,32 @@ export function ScannerPanel(
   const [menu, setMenu] = useState<{ clientX: number; clientY: number; symbol: string } | null>(null);
   const snap = useSyncExternalStore((cb) => stores.scanner.subscribe(cb), () => stores.scanner.getSnapshot());
   const cv = useMemo(() => stores.scanner.currentView(scannerId), [snap, stores.scanner, scannerId]);
+  const strategyRuntimeRef = useRef(new StrategyScannerRuntime());
+  const strategyRowsRef = useRef(cv.rows);
+  const strategyStatusRef = useRef(cv.status);
+  strategyRowsRef.current = cv.rows;
+  strategyStatusRef.current = cv.status;
+  const [strategyAnalysis, setStrategyAnalysis] = useState<Map<string, StrategyScannerRow>>(() => new Map());
+  useEffect(() => {
+    const refreshStrategyAnalysis = () => {
+      const next = strategyRuntimeRef.current.evaluate(
+        strategyRowsRef.current,
+        { bars: stores.bars, stockDetail: stores.stockDetail },
+        strategyStatusRef.current,
+        Date.now(),
+      );
+      setStrategyAnalysis(next);
+    };
+    refreshStrategyAnalysis();
+    const timer = setInterval(refreshStrategyAnalysis, 5_000);
+    return () => clearInterval(timer);
+  }, [stores]);
   const [sort, setSort] = useState<SortState>(() => readScannerSort(config.settings));
   const [columnSettings, setColumnSettings] = useState<ColumnSettings>(() => readColumnSettings(config.settings));
   const sortedMode = useRef<ScannerFilters["mode"] | null>(null);
   const [appliedFilters, setAppliedFilters] = useState<ScannerFilters | null>(null);
+  const [strategyFilters, setStrategyFilters] = useState(() => readStrategyScannerFilters(config.settings));
+  const [strategyDraft, setStrategyDraft] = useState(() => readStrategyScannerFilters(config.settings));
   const engineFiltersRef = useRef(cv.filters);
   useEffect(() => {
     const previous = engineFiltersRef.current;
@@ -152,10 +192,25 @@ export function ScannerPanel(
     setSort(next);
     onConfigChange({ sort: next });
   }, [filters.mode, columnSettings, sort, onConfigChange]);
-  const rows = useMemo(() => rankScannerRows(cv.rows, sort), [cv.rows, sort]);
+  const rows = useMemo(() => {
+    const accessors: Record<string, (row: typeof cv.rows[number]) => number | string | null> = {
+      ...scannerSortAccessors,
+      strategySetup: (row) => {
+        const value = strategyForRow(strategyAnalysis, row.symbol);
+        return value.setupLabel === "—" ? null : value.setupLabel;
+      },
+      strategyStatus: (row) => strategyStatusLabel(strategyForRow(strategyAnalysis, row.symbol).status),
+      strategyQuality: (row) => {
+        const quality = strategyForRow(strategyAnalysis, row.symbol).quality;
+        return quality === "STRONG" ? 3 : quality === "GOOD" ? 2 : quality === "WEAK" ? 1 : null;
+      },
+    };
+    return sortRows([...cv.rows], sort, accessors).filter((row) =>
+      matchesStrategyScannerFilters(strategyForRow(strategyAnalysis, row.symbol), strategyFilters));
+  }, [cv.rows, sort, strategyAnalysis, strategyFilters]);
   const shownColumns = useMemo(() => visibleColumns(columnSettings), [columnSettings]);
 
-  const openFilters = () => { setColumnsOpen(false); setDraft(filters); setFiltersOpen(true); };
+  const openFilters = () => { setColumnsOpen(false); setDraft(filters); setStrategyDraft(strategyFilters); setFiltersOpen(true); };
   const openColumns = () => { setFiltersOpen(false); setColumnsOpen(true); };
   useDismissibleLayer(filtersRef, () => setFiltersOpen(false), { enabled: filtersOpen, anchor: filterTriggerRef.current });
   useDismissibleLayer(columnsRef, () => setColumnsOpen(false), { enabled: columnsOpen, anchor: columnsTriggerRef.current });
@@ -171,7 +226,8 @@ export function ScannerPanel(
     // scanner service may not be installed yet; AppShell retries workspace
     // registration and sends this latest saved filter set when it becomes ready.
     setAppliedFilters(draft);
-    onConfigChange({ scannerFilters: draft });
+    setStrategyFilters(strategyDraft);
+    onConfigChange({ scannerFilters: draft, strategyScannerFilters: strategyDraft });
     if (draft.mode !== filters.mode) {
       const next = defaultSortForVisibleColumns(draft.mode, columnSettings);
       setSort(next);
@@ -179,7 +235,10 @@ export function ScannerPanel(
     }
     setFiltersOpen(false);
   };
-  const resetDefaults = () => setDraft(DEFAULT_SCANNER_FILTERS);
+  const resetDefaults = () => {
+    setDraft(DEFAULT_SCANNER_FILTERS);
+    setStrategyDraft(DEFAULT_STRATEGY_SCANNER_FILTERS);
+  };
   const clickSort = (col: string) => {
     const next = toggleSort(sort, col);
     setSort(next);
@@ -285,7 +344,7 @@ export function ScannerPanel(
       {!cv.refreshedAt && cv.rows.length === 0 && <div style={{ padding: "6px 8px", color: palette.textMuted, borderBottom: `1px solid ${palette.border}` }}>Waiting for scanner data…</div>}
       {!cv.refreshedAt && cv.rows.length > 0 && <div role="status" style={{ padding: "6px 8px", color: palette.textMuted, borderBottom: `1px solid ${palette.border}` }}>Quote snapshots pending for visible symbols…</div>}
       {filtersOpen && (
-        <div ref={filtersRef} className="popover" style={{ top: headerSlot === undefined ? 30 : 6, left: headerSlot === undefined ? 8 : undefined, right: headerSlot === undefined ? undefined : 8, width: 220 }}>
+        <div ref={filtersRef} className="popover" style={{ top: headerSlot === undefined ? 30 : 6, left: headerSlot === undefined ? 8 : undefined, right: headerSlot === undefined ? undefined : 8, width: 260, maxHeight: "80%", overflowY: "auto" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <label>rank <select aria-label="rank mode" value={draft.mode} onChange={(e) => setDraft({ ...draft, mode: e.target.value as ScannerFilters["mode"] })}><option value="gainers">Top gainers</option><option value="losers">Top losers</option><option value="most_active">Most active</option><option value="session_volume">Session Volume</option></select></label>
             {draft.mode !== "most_active" && draft.mode !== "session_volume" && <label>{draft.mode === "gainers" ? "min gain %" : "min loss %"} <input aria-label={draft.mode === "gainers" ? "min gain %" : "min loss %"} type="number" min="0" value={draft.minChangePct} onChange={(e) => setDraft({ ...draft, minChangePct: Math.max(0, Number(e.target.value)) })} style={{ width: 60 }} /></label>}
@@ -296,6 +355,37 @@ export function ScannerPanel(
             <label>rel vol ≥ <input aria-label="rel vol ≥" type="number" min="0" step="0.01" value={draft.minRelativeVolume} onChange={(e) => setDraft({ ...draft, minRelativeVolume: Math.max(0, Number(e.target.value)) })} style={{ width: 70 }} /></label>
             <label>price ≥ <input aria-label="price ≥" type="number" min="0" step="any" value={draft.minPrice === 0 ? "" : draft.minPrice} onChange={(e) => setDraft({ ...draft, minPrice: e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)) })} style={{ width: 70 }} /></label>
             <label>price ≤ <input aria-label="price ≤" type="number" min="0" step="any" value={draft.maxPrice === 0 ? "" : draft.maxPrice} onChange={(e) => setDraft({ ...draft, maxPrice: e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)) })} style={{ width: 70 }} /></label>
+            <div className="mono" style={{ borderTop: `1px solid ${palette.border}`, paddingTop: 5, color: palette.textMuted }}>Trade Guard analysis · local filters</div>
+            <label>setup
+              <select aria-label="strategy setup filter" value={strategyDraft.setup}
+                onChange={(e) => setStrategyDraft({ ...strategyDraft, setup: e.target.value as typeof strategyDraft.setup })}>
+                <option value="all">All setups</option>
+                <option value="micro">Micro Pullback</option>
+                <option value="curl">Curl / Higher-Low</option>
+                <option value="none">No detected setup</option>
+              </select>
+            </label>
+            <label>setup status
+              <select aria-label="strategy status filter" value={strategyDraft.status}
+                onChange={(e) => setStrategyDraft({ ...strategyDraft, status: e.target.value as typeof strategyDraft.status })}>
+                <option value="all">All statuses</option>
+                <option value="eligible">Eligible</option>
+                <option value="developing">Developing</option>
+                <option value="watch">Watch</option>
+                <option value="triggered">Triggered</option>
+                <option value="rejected">Rejected</option>
+                <option value="unknown">Unknown</option>
+              </select>
+            </label>
+            <label>eligibility
+              <select aria-label="strategy eligibility filter" value={strategyDraft.eligibility}
+                onChange={(e) => setStrategyDraft({ ...strategyDraft, eligibility: e.target.value as typeof strategyDraft.eligibility })}>
+                <option value="all">All eligibility</option>
+                <option value="eligible">Eligible</option>
+                <option value="rejected">Rejected</option>
+                <option value="unknown">Unknown</option>
+              </select>
+            </label>
             {invalidPriceRange && <div role="alert" style={{ color: palette.down }}>Minimum price must be no greater than maximum price</div>}
             {cv.refreshedAt && <span className="mono" title={cv.rows.length > 0 ? "Oldest visible row's latest successful quote snapshot" : cv.discoveryAt ? `Candidate discovery updated ${formatTapeTime(cv.discoveryAt)}` : "Candidate discovery time unavailable"} style={{ color: palette.textMuted, whiteSpace: "nowrap" }}>{cv.rows.length > 0 ? "oldest quote" : "updated"} {formatTapeTime(cv.refreshedAt)}</span>}
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
@@ -313,6 +403,11 @@ export function ScannerPanel(
           </span>
         </div>
       )}
+      <div data-testid="strategy-scanner-coverage" className="mono"
+        title="Strategy Scanner reuses eTape's existing provider candidate feed. It is not an exhaustive scan of every US-listed stock. Up to 30 highest-ranked candidates are evaluated, and a fresh one-minute history is required; candidates without it remain Unknown."
+        style={{ padding: "3px 8px", color: palette.textMuted, borderBottom: `1px solid ${palette.border}` }}>
+        Trade Guard · 5s refresh · up to 30 provider candidates · not all US stocks
+      </div>
       {cv.status === "delayed" && <div role="status" className="mono" style={{ padding: "3px 8px", color: palette.textMuted, borderBottom: `1px solid ${palette.border}` }}>Data delayed · shared request budget</div>}
       {cv.status === "paused" && <div role="status" className="mono" style={{ padding: "3px 8px", color: palette.textMuted, borderBottom: `1px solid ${palette.border}` }}>Scanner paused · workspace closed</div>}
       {columnsOpen && (
@@ -355,6 +450,9 @@ export function ScannerPanel(
           <tbody>
             {rows.map((r) => {
               const selected = r.symbol === selectedSymbol;
+              const strategy = strategyForRow(strategyAnalysis, r.symbol);
+              const strategyTitle = [strategy.detail, ...strategy.reasons, ...strategy.warnings]
+                .filter(Boolean).join("\n");
               return (
               <tr key={r.symbol}
                 onClick={() => { setSelectedSymbol(r.symbol); if (cv.session) stores.scanner.markSeen(cv.session, r.symbol, scannerId); }}
@@ -378,6 +476,9 @@ export function ScannerPanel(
                     case "sessionVol": return <td key={column.col} style={numCell} title="Provider-reported volume for the current Scanner session.">{formatCompactShares(r.sessionVolume)}</td>;
                     case "turnover": return <td key={column.col} style={numCell} title="Latest reported base daily dollar turnover.">{formatDollarTurnover(r.turnover)}</td>;
                     case "shortInterest": return <td key={column.col} style={numCell} title={r.shortInterestAsOf ? `as of ${r.shortInterestAsOf}` : undefined}>{formatShortInterest(r.shortInterest)}</td>;
+                    case "strategySetup": return <td key={column.col} style={numCell} title={strategyTitle}>{strategy.setupLabel}</td>;
+                    case "strategyStatus": return <td key={column.col} style={numCell} title={strategyTitle}>{strategyStatusLabel(strategy.status)}</td>;
+                    case "strategyQuality": return <td key={column.col} style={numCell} title={strategyTitle}>{strategyQualityLabel(strategy.quality)}</td>;
                   }
                 })}
               </tr>
