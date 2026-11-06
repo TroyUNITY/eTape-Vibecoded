@@ -18,7 +18,13 @@ Connect the Stage 2.1 Ross-style momentum eligibility evaluator to eTape's exist
 - Added the **Ross Candidates** panel to the panel catalogue.
   - Displays the merged candidate set, source boards, eligibility status, key metrics, and per-check reasoning.
   - Re-evaluates from the existing quote, bar, fundamentals, and news stores.
-  - Does not submit orders, mutate scanner membership, or request new market-data subscriptions.
+- Added an asynchronous, per-symbol `QueryCandidateHistory` read of the local archive.
+  - Reads at most the latest 15,000 one-minute bars and 260 daily bars for one requested symbol.
+  - The Ross Candidates panel requests this history only after the operator expands a candidate and clicks **Load archived bars**.
+  - The result is kept in the panel's local state and used by the evaluator; it is not inserted into the chart BarStore.
+  - The query does not fetch from a new external provider, create chart demands, or start live K-line subscriptions.
+  - Two query slots bound concurrent archive reads.
+  - Does not submit orders or mutate scanner membership.
 - Connected the Stage 2.1 evaluator to candidate rows.
   - The current quote is preferred, then the scanner row price, then Stock Info price.
   - Moomoo `OutstandingShares` from either scanner rows or Stock Info is always labelled and passed as `moomoo_outstanding_shares`, never as verified free float.
@@ -31,9 +37,9 @@ Connect the Stage 2.1 Ross-style momentum eligibility evaluator to eTape's exist
 
 The scanner's current subscription pool admits up to 30 symbols and warms their history in the local archive. However, `WarmArchive` explicitly does not seed or publish those candles into `md.Core` / the UI `BarStore`. Watch-tier scanner subscriptions also do not request a continuous one-minute K-line subscription.
 
-Consequently, the panel can evaluate a symbol only to the extent the relevant quote and candles are already present in the UI stores (for example, after the symbol has been focused in a chart). Missing/stale one-minute data and missing completed daily history remain unknown and therefore produce `PENDING`, unless another known criterion has already failed. The panel does not claim to have evaluated every scanner candidate fully.
+The panel can now request already-archived one-minute and daily history on demand for an expanded candidate, without opening a chart or changing subscriptions. Missing archive ranges remain missing; the query does not silently backfill them. One-minute bars in the local archive may also be stale, because this query is a historical read and not a live K-line subscription. The evaluator's five-minute freshness rule therefore remains in force: stale or missing bars stay unknown and produce `PENDING`, unless another known criterion has already failed.
 
-This is intentional fail-closed behaviour, not an implementation error. A separate bounded candidate-analysis data path is required before all scanner candidates can be assessed continuously without opening charts or consuming excessive market-data/history quota.
+This is intentional fail-closed behaviour. Continuous intraday freshness for a candidate subset remains a separate follow-up decision; it should use explicit bounded demand rather than subscribe to every discovery row.
 
 ## Free-float provider decision
 
