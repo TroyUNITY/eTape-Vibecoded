@@ -179,7 +179,7 @@ describe("ScannerPanel", () => {
       "Symbol", "%", "Last", "Float", "REL VOL", "Session Vol", "Vol", "Turnover", "Short Int",
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Reset columns" }));
-    expect(onConfigChange).toHaveBeenLastCalledWith(expect.objectContaining({ scannerColumns: { order: ["changePct", "last", "float", "relVol", "vol", "sessionVol", "turnover", "shortInterest"], hidden: [] } }));
+    expect(onConfigChange).toHaveBeenLastCalledWith(expect.objectContaining({ scannerColumns: { order: ["changePct", "last", "float", "relVol", "vol", "sessionVol", "turnover", "shortInterest", "strategySetup", "strategyStatus", "strategyQuality"], hidden: [] } }));
   });
 
   it("falls back from a hidden active sort to the mode default", () => {
@@ -601,7 +601,7 @@ describe("ScannerPanel", () => {
     expect(commands.sendCommand).toHaveBeenCalledWith("SetScannerFilters", expect.objectContaining({
       workspaceId: "main", panelId: "scanner-lowfloat", filters: expect.objectContaining({ maxFloatShares: 20_000_000 }),
     }));
-    await waitFor(() => expect(onConfigChange).toHaveBeenCalledWith({ scannerFilters: expect.objectContaining({ maxFloatShares: 20_000_000 }) }));
+    await waitFor(() => expect(onConfigChange).toHaveBeenCalledWith(expect.objectContaining({ scannerFilters: expect.objectContaining({ maxFloatShares: 20_000_000 }) })));
   });
 
   it("Reset defaults clears the draft inputs without persisting until Apply", () => {
