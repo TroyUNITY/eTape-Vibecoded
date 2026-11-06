@@ -69,9 +69,9 @@ func (s *spyCandidateHistory) ReadRecentDailyBars(symbol string, limit int) ([]f
 func TestQueryCandidateHistoryReadsBoundedLocalArchive(t *testing.T) {
 	now := time.Date(2026, 11, 6, 15, 0, 0, 0, time.UTC)
 	archive := &spyCandidateHistory{
-		spyFills:   &spyFills{},
-		oneMinute:  []feed.Bar{{BucketMs: 1000, O: 1, H: 2, L: 0.5, C: 1.5, Volume: 1200}},
-		daily:      []feed.Bar{{BucketMs: 2000, O: 2, H: 3, L: 1, C: 2.5, Volume: 25000}},
+		spyFills:  &spyFills{},
+		oneMinute: []feed.Bar{{BucketMs: 1000, O: 1, H: 2, L: 0.5, C: 1.5, Volume: 1200}},
+		daily:     []feed.Bar{{BucketMs: 2000, O: 2, H: 3, L: 1, C: 2.5, Volume: 25000}},
 	}
 	q := newQueries(archive, clock.NewFake(now))
 	out := q.handleContext(context.Background(), "QueryCandidateHistory", json.RawMessage(`{"symbol":" us.test "}`))
