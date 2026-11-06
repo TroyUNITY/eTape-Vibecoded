@@ -186,4 +186,28 @@ describe("DemandRegistry", () => {
       { name: "EnsureSymbol", args: { demandId: "p2", symbol: "US.MSFT", profile: "focused" } },
     ]);
   });
+
+  it("caps candidate monitoring at five unique symbols and releases capacity", async () => {
+    const f = fakeClient();
+    const reg = new DemandRegistry(f.client);
+
+    for (let i = 0; i < 5; i++) {
+      const ack = await reg.ensure(`candidate-${i}`, `US.STK${i}`, "candidate");
+      expect(ack.status).toBe("accepted");
+    }
+
+    // Two panel instances can share a single symbol without consuming another
+    // unique-symbol slot.
+    const duplicate = await reg.ensure("candidate-duplicate", "US.STK0", "candidate");
+    expect(duplicate.status).toBe("accepted");
+
+    const blocked = await reg.ensure("candidate-overflow", "US.STK5", "candidate");
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.reason).toContain("5 unique symbols");
+
+    reg.release("candidate-0");
+    reg.release("candidate-duplicate");
+    const replacement = await reg.ensure("candidate-replacement", "US.STK5", "candidate");
+    expect(replacement.status).toBe("accepted");
+  });
 });
