@@ -92,6 +92,12 @@ jobs:
         working-directory: ui
         run: npm run lint
 
+      # Run strategy tests independently so an unrelated golden-image
+      # failure cannot prevent candidate-analysis regressions from executing.
+      - name: Strategy tests
+        working-directory: ui
+        run: npx vitest run --project strategy
+
       - name: Test
         working-directory: ui
         run: npm test
