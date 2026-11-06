@@ -687,8 +687,10 @@ func supportedMarket(sym string) bool {
 }
 
 // demandForProfile builds the feed.Demand for a profile. focused adds SubBook
-// only for US symbols (HK is LV1: a book sub retries forever). Returns ok=false
-// for an unknown profile.
+// only for US symbols (HK is LV1: a book sub retries forever). Candidate
+// monitoring is US-only and requests one-minute bars without pinning the
+// symbol under quota pressure. Returns ok=false for an unsupported profile
+// or market/profile combination.
 func demandForProfile(id, symbol, profile string) (feed.Demand, bool) {
 	switch profile {
 	case "chart":
@@ -701,6 +703,11 @@ func demandForProfile(id, symbol, profile string) (feed.Demand, bool) {
 			subs = append(subs, feed.SubBook)
 		}
 		return feed.Demand{ID: id, Symbol: symbol, Subs: subs, Focused: true, WantsHistory: true, CachedDaily: true}, true
+	case "candidate":
+		if !strings.HasPrefix(symbol, "US.") {
+			return feed.Demand{}, false
+		}
+		return feed.MomentumCandidateDemand(id, symbol), true
 	case "interest":
 		return feed.Demand{ID: id, Symbol: symbol}, true
 	default:
