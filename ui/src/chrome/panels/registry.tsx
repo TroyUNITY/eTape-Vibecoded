@@ -180,7 +180,6 @@ export const PANELS: Record<string, PanelDef> = {
     glyph: "TG",
     description: "Long-only momentum setup and entry-quality analysis",
     symbolBearing: true,
-    demand: "chart",
   },
   "stock-info": stockInfoPanel,
   // Saved workspaces may still carry the former panel id.

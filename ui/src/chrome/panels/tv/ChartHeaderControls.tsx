@@ -11,6 +11,7 @@ export { TIMEFRAMES } from "../../../render/chart/barBucket";
 
 export interface ChartHeaderControlsProps {
   palette: Palette; timeframe: string;
+  dataSourceEnabled?: boolean;
   dataSource: "moomoo" | "filtered"; onDataSource: (source: "moomoo" | "filtered") => void; dataStatus?: string;
   onTimeframe: (tf: string) => void;
   onAddIndicator: (type: IndicatorType) => void; onScreenshot: () => void; onOpenSettings: () => void;
@@ -27,7 +28,7 @@ export interface ChartHeaderControlsProps {
 // header already shows — no separate symbol button here, and styled with the app
 // Daylight-Ledger palette + sans font so it reads as chrome, not canvas.
 export function ChartHeaderControls(
-  { palette, timeframe, dataSource, onDataSource, dataStatus, onTimeframe, onAddIndicator, onScreenshot, onOpenSettings, volumeAvailable = true, profileAvailable = true,
+  { palette, timeframe, dataSourceEnabled = false, dataSource, onDataSource, dataStatus, onTimeframe, onAddIndicator, onScreenshot, onOpenSettings, volumeAvailable = true, profileAvailable = true,
     crosshairSyncEnabled, onToggleCrosshairSync, crosshairSyncDisabledReason,
     drawingToolsVisible, onToggleDrawingTools }: ChartHeaderControlsProps,
 ): JSX.Element {
@@ -61,6 +62,7 @@ export function ChartHeaderControls(
           {TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
         </select>
         {sep}
+        {dataSourceEnabled && <>
         <div style={{ display: "flex", alignItems: "center", gap: 1, flex: "0 0 auto" }} aria-label="chart data source">
           {(["moomoo", "filtered"] as const).map((source) => {
             const selected = source === dataSource;
@@ -81,6 +83,7 @@ export function ChartHeaderControls(
           style={{ maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: palette.textMuted, fontSize: 10, paddingLeft: 4 }}>
           {dataStatus}
         </span>}
+        </>}
         {sep}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 2, flex: "0 0 auto" }}>
