@@ -45,7 +45,7 @@ function checkColor(state: "pass" | "fail" | "unknown", palette: Palette): strin
 
 export function RossCandidatesPanel({ stores }: PanelProps): JSX.Element {
   const { palette } = useTheme();
-  const [revision, setRevision] = useState(0);
+  const [revision, setRevision] = useState(1);
 
   // Scanner, quote, chart, fundamentals and news are independent stores.
   // Coalesce their updates so one burst only re-runs the candidate evaluator
@@ -67,7 +67,6 @@ export function RossCandidatesPanel({ stores }: PanelProps): JSX.Element {
       stores.news.subscribe(refresh),
     ];
     const heartbeat = setInterval(refresh, 30_000);
-    setRevision((value) => value + 1);
     return () => {
       off.forEach((unsubscribe) => unsubscribe());
       clearInterval(heartbeat);
