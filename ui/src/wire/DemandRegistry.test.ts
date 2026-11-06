@@ -210,4 +210,21 @@ describe("DemandRegistry", () => {
     const replacement = await reg.ensure("candidate-replacement", "US.STK5", "candidate");
     expect(replacement.status).toBe("accepted");
   });
+
+  it("reserves candidate monitor capacity while EnsureSymbol acknowledgements are pending", async () => {
+    const f = controlledClient();
+    const reg = new DemandRegistry(f.client);
+    const pending = Array.from({ length: 5 }, (_, i) =>
+      reg.ensure(`pending-${i}`, `US.PENDING${i}`, "candidate"));
+
+    expect(f.sent).toHaveLength(5);
+    const blocked = await reg.ensure("pending-overflow", "US.OVERFLOW", "candidate");
+    expect(blocked.status).toBe("blocked");
+    expect(f.sent).toHaveLength(5);
+
+    for (const resolve of f.resolvers.slice(0, 5)) {
+      resolve({ kind: "ack", corrId: "", status: "accepted" });
+    }
+    await Promise.all(pending);
+  });
 });
