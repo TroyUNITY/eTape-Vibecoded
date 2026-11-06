@@ -4,7 +4,7 @@ import { useTheme } from "../ThemeProvider";
 import type { Palette } from "../../render/palette";
 import { evaluateRossMomentumCandidate, type CandidateEligibilityResult } from "../../strategy/candidateEligibility";
 import type { MomentumScannerCandidate } from "../../data/ScannerStore";
-import type { Bar } from "../../wire/contract";
+import type { Bar, QueryCandidateHistoryResult } from "../../wire/contract";
 
 const MAX_ANALYSIS_1M_BARS = 12_000;
 const MAX_ANALYSIS_DAILY_BARS = 260;
@@ -19,13 +19,6 @@ interface CandidateHistoryData {
   dailyBars: Bar[];
   error: string | null;
   loadedAtMs: number;
-}
-
-interface CandidateHistoryPayload {
-  symbol: string;
-  oneMinuteBars?: Bar[];
-  dailyBars?: Bar[];
-  error?: string;
 }
 
 function positive(value: number | null | undefined): number | null {
@@ -106,15 +99,15 @@ export function RossCandidatesPanel({ stores, commands }: PanelProps): JSX.Eleme
     try {
       const raw = await commands.sendQuery("QueryCandidateHistory", { symbol });
       if (raw === null || typeof raw !== "object") throw new Error("The engine returned an invalid history response.");
-      const response = raw as CandidateHistoryPayload;
+      const response = raw as QueryCandidateHistoryResult;
       if (response.symbol !== symbol || !Array.isArray(response.oneMinuteBars) || !Array.isArray(response.dailyBars)) {
         throw new Error("The engine returned an incomplete history response.");
       }
       setHistoryBySymbol((current) => ({
         ...current,
         [symbol]: {
-          oneMinuteBars: response.oneMinuteBars!,
-          dailyBars: response.dailyBars!,
+          oneMinuteBars: response.oneMinuteBars,
+          dailyBars: response.dailyBars,
           error: response.error || null,
           loadedAtMs: Date.now(),
         },
