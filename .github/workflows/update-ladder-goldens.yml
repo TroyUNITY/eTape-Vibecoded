@@ -1,0 +1,76 @@
+name: One-time Ladder Golden Refresh
+
+on:
+  push:
+    branches:
+      - trade-guard-performance
+    paths:
+      - .github/workflows/update-ladder-goldens.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  refresh:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          ref: trade-guard-performance
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Regenerate Ladder goldens on Windows
+        working-directory: ui
+        shell: pwsh
+        run: |
+          $env:UPDATE_GOLDENS = "1"
+          npx vitest run test/golden/ladder.golden.test.ts
+
+      - name: Commit only the five changed light-mode references and remove this helper
+        shell: pwsh
+        run: |
+          $expected = @(
+            "ui/test/golden/goldens/ladder2col-asksonly-light.png",
+            "ui/test/golden/goldens/ladder2col-bidsonly-light.png",
+            "ui/test/golden/goldens/ladder2col-flash-light.png",
+            "ui/test/golden/goldens/ladder2col-full-light.png",
+            "ui/test/golden/goldens/ladder2col-mixed-prices-light.png"
+          )
+          git add -- $expected
+          $staged = @(git diff --cached --name-only | Sort-Object)
+          $expectedSorted = @($expected | Sort-Object)
+          if (($staged -join [Environment]::NewLine) -ne ($expectedSorted -join [Environment]::NewLine)) {
+            Write-Host "Unexpected staged files:"
+            git diff --cached --name-only
+            throw "Refusing to commit anything other than the five approved light-mode Ladder references."
+          }
+          git rm -- .github/workflows/update-ladder-goldens.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test(ui): refresh light ladder goldens for brighter depth colors"
+          git push origin HEAD:refs/heads/trade-guard-performance
+
+      - name: Dispatch full CI for updated PR commit
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+          $body = @{ ref = "trade-guard-performance" } | ConvertTo-Json
+          Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/TroyUNITY/eTape-Vibecoded/actions/workflows/ci.yml/dispatches" -Headers $headers -ContentType "application/json" -Body $body | Out-Null
