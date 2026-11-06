@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PanelProps } from "./registry";
 import { useTheme } from "../ThemeProvider";
 import type { Palette } from "../../render/palette";
@@ -128,12 +128,12 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
     () => readRetainedCandidates(config.settings[RETAINED_CANDIDATES_SETTING]),
   );
 
-  const saveRetainedCandidates = (next: RetainedCandidateRecord[]) => {
+  const saveRetainedCandidates = useCallback((next: RetainedCandidateRecord[]) => {
     setRetainedCandidates(next);
     onConfigChange({ [RETAINED_CANDIDATES_SETTING]: next });
-  };
+  }, [onConfigChange]);
 
-  const keepCandidate = (candidate: MomentumScannerCandidate) => {
+  const keepCandidate = useCallback((candidate: MomentumScannerCandidate) => {
     if (retainedCandidates.some((item) => item.symbol === candidate.symbol) ||
       retainedCandidates.length >= MAX_RETAINED_CANDIDATES) return;
     const now = new Date().toISOString();
@@ -143,12 +143,12 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
       lastSeenAt: candidate.refreshedAt || now,
       snapshot: candidate,
     }, ...retainedCandidates]);
-  };
+  }, [retainedCandidates, saveRetainedCandidates]);
 
-  const removeRetainedCandidate = (symbol: string) => {
+  const removeRetainedCandidate = useCallback((symbol: string) => {
     if (!retainedCandidates.some((item) => item.symbol === symbol)) return;
     saveRetainedCandidates(retainedCandidates.filter((item) => item.symbol !== symbol));
-  };
+  }, [retainedCandidates, saveRetainedCandidates]);
 
   // Scanner, quote, chart, fundamentals and news are independent stores.
   // Coalesce their updates so one burst only re-runs the candidate evaluator
@@ -305,7 +305,7 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
       const next = [...nextBySymbol.values()].sort((a, b) => Date.parse(b.retainedAt) - Date.parse(a.retainedAt));
       saveRetainedCandidates(next);
     }
-  }, [evaluated, retainedCandidates]);
+  }, [evaluated, retainedCandidates, saveRetainedCandidates]);
 
   const counts = useMemo(() => ({
     eligible: evaluated.filter((item) => item.result.status === "ELIGIBLE").length,
