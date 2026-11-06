@@ -161,6 +161,17 @@ describe("ScannerStore.onNewHit", () => {
   });
 });
 
+describe("ScannerStore.rowForSymbol", () => {
+  it("returns the matching row from the freshest session", () => {
+    const s = new ScannerStore();
+    s.apply(rank("snapshot", "premarket", { refreshedAt: "2026-10-30T10:00:00Z", rows: [r("A", 1), r("B", 2)] }));
+    s.apply(rank("delta", "rth", { refreshedAt: "2026-10-30T14:00:00Z", rows: [r("B", 3), r("C", 4)] }));
+    expect(s.rowForSymbol("B")?.symbol).toBe("B");
+    expect(s.rowForSymbol("A")?.symbol).toBe("A");
+    expect(s.rowForSymbol("UNKNOWN")).toBeUndefined();
+  });
+});
+
 describe("ScannerStore.currentView", () => {
   const iso = (h: number) => `2026-07-08T${String(h).padStart(2, "0")}:00:00.000Z`;
 

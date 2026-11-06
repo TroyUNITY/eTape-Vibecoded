@@ -5,6 +5,7 @@ export type GuardCheckState = "pass" | "fail" | "unknown" | "warning";
 export type GuardStatus =
   | "NO_DATA"
   | "DATA_UNCERTAIN"
+  | "DATA_INCOMPLETE"
   | "FILTERED"
   | "NO_SETUP"
   | "BLOCKED"
@@ -105,6 +106,7 @@ export interface TradeGuardResult {
   resistanceName: string;
   currentSetupReady: boolean;
   dataUncertain: boolean;
+  dataIncomplete: boolean;
   stockPassed: boolean;
   metrics: {
     price: number | null;
@@ -146,6 +148,27 @@ interface Indicators {
 
 function finite(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+function recentDataIntegrityIssues(bars: Bar[]): string[] {
+  const issues = new Set<string>();
+  for (const bar of bars.slice(-30)) {
+    const timestamp = barMs(bar);
+    if (!Number.isFinite(timestamp)) {
+      issues.add("A recent one-minute candle has an invalid timestamp.");
+      continue;
+    }
+    const values = [bar.o, bar.h, bar.l, bar.c, bar.v];
+    if (!values.every(Number.isFinite)) {
+      issues.add("A recent one-minute candle contains a non-finite OHLCV value.");
+      continue;
+    }
+    if (bar.o <= 0 || bar.h <= 0 || bar.l <= 0 || bar.c <= 0 ||
+      bar.h < bar.l || bar.h < Math.max(bar.o, bar.c) || bar.l > Math.min(bar.o, bar.c)) {
+      issues.add("A recent one-minute candle has internally inconsistent OHLC prices.");
+    }
+    if (bar.v < 0) issues.add("A recent one-minute candle has negative volume.");
+  }
+  return [...issues];
 }
 function barMs(bar: Bar): number {
   return Date.parse(bar.bucketStart);
@@ -456,7 +479,8 @@ function noDataResult(symbol: string): TradeGuardResult {
     nearestResistance: null,
     resistanceName: "None",
     currentSetupReady: false,
-    dataUncertain: true,
+    dataUncertain: false,
+    dataIncomplete: true,
     stockPassed: false,
     metrics: {
       price: null,
@@ -479,10 +503,16 @@ function noDataResult(symbol: string): TradeGuardResult {
 
 export function evaluateTradeGuard(input: TradeGuardInput): TradeGuardResult {
   const settings = { ...DEFAULT_TRADE_GUARD_SETTINGS, ...input.settings };
-  const bars = input.bars
-    .filter((bar) => Number.isFinite(barMs(bar)))
-    .slice()
-    .sort((a, b) => barMs(a) - barMs(b));
+  const dataIntegrityIssues = recentDataIntegrityIssues(input.bars);
+  const inputBars = input.bars.filter((bar) => Number.isFinite(barMs(bar)));
+  let bars = inputBars;
+  // BarStore keeps its series ordered. Avoid copying/sorting the entire stored
+  // history on every refresh; only use a defensive sort for malformed ordering.
+  let ordered = true;
+  for (let i = 1; i < inputBars.length; i++) {
+    if (barMs(inputBars[i]) < barMs(inputBars[i - 1])) { ordered = false; break; }
+  }
+  if (!ordered) bars = inputBars.slice().sort((a, b) => barMs(a) - barMs(b));
   const symbol = bars[0]?.symbol ?? input.detail?.symbol ?? "";
   if (bars.length < 21) return noDataResult(symbol);
 
@@ -538,10 +568,12 @@ export function evaluateTradeGuard(input: TradeGuardInput): TradeGuardResult {
   const changePassed = dayChangePct !== null && dayChangePct >= settings.minDayChange;
   const rvolPassed = rvol.value !== null && rvol.value >= settings.minRelativeVolume;
   const activityPassed = sessionVolume >= settings.minSessionVolume;
-  const floatSuspect = floatShares !== null && floatShares < 100_000;
-  const rvolSuspect = rvol.value !== null &&
-    (rvol.value > 500 || !(rvol.averageVolume && rvol.averageVolume > 0));
-  const dataUncertain = floatShares === null || rvol.value === null || floatSuspect || rvolSuspect;
+  // Missing eligibility inputs mean the strategy cannot finish its checks;
+  // they do not prove that the underlying market data is corrupt.
+  const dataIncomplete = floatShares === null || dayChangePct === null || rvol.value === null;
+  // DATA_UNCERTAIN is reserved for demonstrable integrity problems in recent
+  // candle values. Exceptional RVOL and genuinely tiny floats are warnings.
+  const dataUncertain = dataIntegrityIssues.length > 0;
   const stockPassed = pricePassed && floatPassed && changePassed && rvolPassed && activityPassed;
 
   const entry = candidate?.trigger ?? null;
@@ -597,7 +629,7 @@ export function evaluateTradeGuard(input: TradeGuardInput): TradeGuardResult {
   const notExtended = candidate?.notExtended ?? false;
   const riskValid = candidate?.riskValid ?? false;
   const patternPassed = candidate !== null && notExtended;
-  const currentSetupReady = patternPassed && stockPassed && !dataUncertain &&
+  const currentSetupReady = patternPassed && stockPassed && !dataUncertain && !dataIncomplete &&
     riskValid && roomFor2R && entryWindowValid && noChase;
 
   const reasons: string[] = [];
@@ -615,8 +647,7 @@ export function evaluateTradeGuard(input: TradeGuardInput): TradeGuardResult {
     "x is below " + fmt(settings.minRelativeVolume, 1) + "x.");
   if (!activityPassed) reasons.push("Session volume " + Math.round(sessionVolume).toLocaleString("en-US") +
     " is below " + Math.round(settings.minSessionVolume).toLocaleString("en-US") + ".");
-  if (floatSuspect) reasons.push("Float is unusually small; verify its source before relying on it.");
-  if (rvolSuspect) reasons.push("Relative-volume baseline looks suspicious.");
+  if (dataIntegrityIssues.length > 0) reasons.push(...dataIntegrityIssues);
 
   if (candidate === null) {
     reasons.push("No qualifying Micro Pullback or Curl base is visible in the latest completed one-minute candles.");
@@ -634,7 +665,15 @@ export function evaluateTradeGuard(input: TradeGuardInput): TradeGuardResult {
     else if (!noChase) reasons.push("Last price is above the maximum planned entry of $" + fmt(maximumEntry, 3) + ".");
   }
 
-  if (dataUncertain) warnings.push("Critical eligibility data is incomplete or suspect. No new setup should be armed.");
+  if (floatShares !== null && floatShares < 100_000) {
+    warnings.push("Reported float is exceptionally small (" + Math.round(floatShares).toLocaleString("en-US") +
+      " shares). This can be genuine, but verify the provider figure and its units.");
+  }
+  if (rvol.value !== null && rvol.value > 500) {
+    warnings.push("Same-time RVOL is exceptionally high (" + fmt(rvol.value, 1) +
+      "x). This is not automatically a data error; check the comparison baseline and current session volume.");
+  }
+  if (dataIncomplete) warnings.push("One or more eligibility inputs are unavailable. Setup quality cannot be fully assessed.");
   if (softDollarBefore2R && nextHalfOrWhole !== null) {
     warnings.push("Psychological level at $" + fmt(nextHalfOrWhole) + " is before 2R; treat it as a soft warning, not a hard blocker.");
   }
@@ -659,12 +698,14 @@ export function evaluateTradeGuard(input: TradeGuardInput): TradeGuardResult {
   }
 
   const status: GuardStatus = dataUncertain ? "DATA_UNCERTAIN"
-    : !stockPassed ? "FILTERED"
+    : dataIncomplete ? "DATA_INCOMPLETE"
+      : !stockPassed ? "FILTERED"
       : candidate === null ? "NO_SETUP"
         : !currentSetupReady ? "BLOCKED" : current.h >= (entry ?? Number.POSITIVE_INFINITY) ? "TRIGGERED" : "WATCH";
   const headline = ({
     NO_DATA: "Waiting for one-minute market data",
-    DATA_UNCERTAIN: "Data incomplete — no new entry permission",
+    DATA_UNCERTAIN: "Recent candle data failed integrity checks",
+    DATA_INCOMPLETE: "Eligibility inputs are incomplete — no new entry permission",
     FILTERED: "Stock does not pass eligibility filters",
     NO_SETUP: "No qualifying setup right now",
     BLOCKED: "Setup detected, but one or more checks failed",
@@ -732,6 +773,7 @@ export function evaluateTradeGuard(input: TradeGuardInput): TradeGuardResult {
     resistanceName,
     currentSetupReady,
     dataUncertain,
+    dataIncomplete,
     stockPassed,
     metrics: {
       price,

@@ -28,6 +28,19 @@ describe("BarStore", () => {
     expect(s.allSeries("US.AAPL", "1m")).toHaveLength(2);
   });
 
+  it("returns a bounded, ordered tail without changing the visible chart window", () => {
+    const s = new BarStore();
+    s.apply(snap([
+      bar("2026-07-09T13:30:00Z", 3.4, false),
+      bar("2026-07-09T13:31:00Z", 3.5, false),
+      bar("2026-07-09T13:32:00Z", 3.6, false),
+    ]));
+    s.selectWindow("US.AAPL", "1m", Date.parse("2026-07-09T13:31:00Z"), Date.parse("2026-07-09T13:33:00Z"));
+    expect(s.series("US.AAPL", "1m")).toHaveLength(2);
+    expect(s.tailSeries("US.AAPL", "1m", 2).map((b) => b.c)).toEqual([3.5, 3.6]);
+    expect(s.tailSeries("US.AAPL", "1m", 0)).toEqual([]);
+  });
+
   it("upserts the in-progress bar in place, then finalizes it", () => {
     const s = new BarStore();
     s.apply(delta(bar("09:30", 3.5, true)));

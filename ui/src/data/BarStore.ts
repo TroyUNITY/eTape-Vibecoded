@@ -75,6 +75,13 @@ export class BarStore extends PaintStore {
     return (this.series_.get(this.key(symbol, timeframe)) ?? []).slice();
   }
 
+  // A bounded tail avoids copying an unbounded chart archive for strategy analysis.
+  tailSeries(symbol: string, timeframe: string, maxBars: number): Bar[] {
+    const all = this.series_.get(this.key(symbol, timeframe)) ?? [];
+    const cap = Number.isFinite(maxBars) ? Math.max(0, Math.floor(maxBars)) : 0;
+    return cap === 0 ? [] : all.slice(Math.max(0, all.length - cap));
+  }
+
   latestBar(symbol: string, timeframe: string): Bar | undefined {
     return this.series_.get(this.key(symbol, timeframe))?.at(-1);
   }
