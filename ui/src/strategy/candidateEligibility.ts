@@ -30,6 +30,8 @@ export interface RossMomentumCriteria {
   minSameTimeRelativeVolume: number;
   /** Existing Trade Guard comparison window; Warrior's guide does not prescribe a lookback count. */
   relativeVolumeSessions: number;
+  /** Keep setup evaluation on recent intraday candles; aligned with the Strategy Scanner prototype. */
+  maxOneMinuteBarAgeMs: number;
 }
 
 export const DEFAULT_ROSS_MOMENTUM_CRITERIA: RossMomentumCriteria = {
@@ -38,6 +40,7 @@ export const DEFAULT_ROSS_MOMENTUM_CRITERIA: RossMomentumCriteria = {
   maxFloatSharesExclusive: 100_000_000,
   minSameTimeRelativeVolume: 2,
   relativeVolumeSessions: 10,
+  maxOneMinuteBarAgeMs: 5 * 60_000,
 };
 
 export interface CandidateDailyChartAssessment {
@@ -84,6 +87,7 @@ export interface CandidateEligibilityResult {
     floatSource: CandidateFloatSource | null;
     sameTimeRelativeVolume: number | null;
     relativeVolumeObservations: number;
+    latestOneMinuteBarAgeMs: number | null;
     ema20: number | null;
     ema50: number | null;
     ema200: number | null;
@@ -175,6 +179,39 @@ function unknownRelativeVolume(reason: string) {
   };
 }
 
+function intradayFreshness(
+  bars: readonly Bar[],
+  asOfMs: number | null,
+  maxAgeMs: number,
+): { state: EligibilityCheckState; ageMs: number | null; detail: string } {
+  if (!finite(asOfMs)) {
+    return { state: "unknown", ageMs: null, detail: "Evaluation time is unavailable." };
+  }
+  let latestMs = -Infinity;
+  for (const bar of bars) {
+    const ms = Date.parse(bar.bucketStart);
+    if (Number.isFinite(ms) && ms <= asOfMs && ms > latestMs) latestMs = ms;
+  }
+  if (!Number.isFinite(latestMs)) {
+    return { state: "unknown", ageMs: null, detail: "No timestamped one-minute candles are available." };
+  }
+  const ageMs = asOfMs - latestMs;
+  if (ageMs > maxAgeMs) {
+    return {
+      state: "unknown",
+      ageMs,
+      detail: "Latest one-minute candle is " + Math.ceil(ageMs / 1000) +
+        " seconds old; the maximum allowed age is " + Math.ceil(maxAgeMs / 1000) + " seconds.",
+    };
+  }
+  return {
+    state: "pass",
+    ageMs,
+    detail: "Latest one-minute candle is " + Math.ceil(ageMs / 1000) +
+      " seconds old; maximum " + Math.ceil(maxAgeMs / 1000) + " seconds.",
+  };
+}
+
 /**
  * Evaluates the general Ross-style momentum candidate criteria, not an
  * intraday chart setup. This is intentionally a pure function: it does not
@@ -213,6 +250,18 @@ export function evaluateRossMomentumCandidate(
     }
   }
   checks.push({ id: "float", label: "Free float", state: floatState, detail: floatDetail });
+
+  const freshness = intradayFreshness(
+    input.oneMinuteBars,
+    input.asOfMs,
+    criteria.maxOneMinuteBarAgeMs,
+  );
+  checks.push({
+    id: "intraday-data-freshness",
+    label: "Fresh one-minute data",
+    state: freshness.state,
+    detail: freshness.detail,
+  });
 
   const relativeVolume = finite(input.asOfMs)
     ? sameTimeRelativeVolume([...input.oneMinuteBars], input.asOfMs, criteria.relativeVolumeSessions)
@@ -289,6 +338,7 @@ export function evaluateRossMomentumCandidate(
       floatSource,
       sameTimeRelativeVolume: rvolValue,
       relativeVolumeObservations: relativeVolume.observations,
+      latestOneMinuteBarAgeMs: freshness.ageMs,
       ema20: trend.ema20,
       ema50: trend.ema50,
       ema200: trend.ema200,
