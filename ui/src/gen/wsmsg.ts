@@ -919,11 +919,6 @@ export interface QueryChartWindowResult {
   historyRevision: number /* int64 */;
 }
 /**
- * QueryFilteredChartWindowArgs requests a chart-only reconstruction from
- * historical trade reports. Exactly one explicit half-open UTC range is used;
- * the backend enforces a bounded lookback and accepts only 1m or 5m.
- */
-/**
  * QueryCandidateHistoryArgs requests a bounded read of the existing local
  * market-data archive for one candidate. It never creates a subscription.
  */
@@ -937,6 +932,11 @@ export interface QueryCandidateHistoryResult {
   dailyBars: Bar[];
   error?: string;
 }
+/**
+ * QueryFilteredChartWindowArgs requests a chart-only reconstruction from
+ * historical trade reports. Exactly one explicit half-open UTC range is used;
+ * the backend enforces a bounded lookback and accepts only 1m or 5m.
+ */
 export interface QueryFilteredChartWindowArgs {
   symbol: string;
   timeframe: string;
