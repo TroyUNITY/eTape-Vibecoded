@@ -54,6 +54,16 @@ describe("chart panel market-data topics", () => {
   });
 });
 
+describe("Trade Guard panel", () => {
+  it("subscribes to market data and read-only analysis inputs", () => {
+    expect(PANELS["trade-guard"]).toBeDefined();
+    expect(PANELS["trade-guard"].topics).toEqual(["md.bars", "stock.detail", "scanner.rank", "news.item"]);
+    expect(PANELS["trade-guard"].demand).toBe("chart");
+    expect(PANELS["trade-guard"].symbolBearing).toBe(true);
+    expect(CATALOG.map((panel) => panel.panelId)).toContain("trade-guard");
+  });
+});
+
 describe("catalog metadata", () => {
   it("keeps the canonical tape title and its responsive short title", () => {
     expect(PANELS.tape.title).toBe("Time & Sales");

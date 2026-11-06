@@ -69,6 +69,12 @@ export class BarStore extends PaintStore {
     return all.filter((b) => { const ms = Date.parse(b.bucketStart); return ms >= range.fromMs && ms < range.toMs; });
   }
 
+  // Full stored history, independent of the chart viewport. Strategy evaluators
+  // need older bars for same-time RVOL and higher-timeframe context when zoomed in.
+  allSeries(symbol: string, timeframe: string): Bar[] {
+    return (this.series_.get(this.key(symbol, timeframe)) ?? []).slice();
+  }
+
   latestBar(symbol: string, timeframe: string): Bar | undefined {
     return this.series_.get(this.key(symbol, timeframe))?.at(-1);
   }
