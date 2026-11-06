@@ -148,7 +148,7 @@ function assessResistance(
   }
 
   const overhead = [...unique.values()]
-    .filter((level) => level.price > price)
+    .filter((level) => level.price >= price)
     .sort((a, b) => a.price - b.price);
 
   if (overhead.length === 0) {
@@ -175,7 +175,8 @@ function assessResistance(
     levelType: nearest.type,
     observations: completed.length,
     detail: "Nearest overhead " + (nearest.type === "prior_20_day_high" ? "20-day high" : "confirmed daily swing high") +
-      " is $" + nearest.price.toFixed(2) + " (" + distancePct.toFixed(2) + "% above price); eTape's nearby threshold is " +
+      " is $" + nearest.price.toFixed(2) + " (" + distancePct.toFixed(2) + "% " +
+      (distancePct === 0 ? "at price" : "above price") + "); eTape's nearby threshold is " +
       criteria.nearbyResistancePct.toFixed(1) + "%.",
   };
 }
