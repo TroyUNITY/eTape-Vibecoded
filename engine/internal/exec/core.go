@@ -209,7 +209,7 @@ func NewCore(cfg CoreConfig) *Core {
 		syslog:                 sl,
 		startingBalance:        cfg.StartingBalance,
 		recoverSnapshotTimeout: recoverSnapshotTimeout,
-		pendingSubmits:          make(map[string]chan struct{}),
+		pendingSubmits:         make(map[string]chan struct{}),
 		cmds:                   make(chan cmdReq),
 		bevents:                make(chan BrokerEvent, 1024),
 		markCh:                 make(chan Mark, 256),
