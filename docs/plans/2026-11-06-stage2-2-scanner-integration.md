@@ -58,11 +58,20 @@ No provider key, paid subscription, licensing agreement, or provider adapter has
 - An FMP or Intrinio API adapter, API-key storage, source validation, or licensing integration.
 - A technical-breakout detector.
 - An automatic nearby-resistance assessment.
-- A new eligibility persistence/grace-period mechanism beyond the existing Scanner board's trading-cycle stickiness.
+- Candidate-level sticky retention is not implemented yet: when a symbol disappears from all three selected discovery boards, it leaves this view. Preserving previously qualified candidates independently of the current rankings remains a follow-up requirement.
 - Changes to Trade Guard, Scanner filters, backend Scanner ranking, pool limits, market-data subscriptions, or order workflows.
 
 ## Validation
 
 - Scanner aggregation tests cover source merging, symbol deduplication, newest-row selection, Losers exclusion, freshest-session selection, and delayed-board handling.
-- Ross Candidates panel tests assert that Moomoo-only float evidence and absent chart history remain pending.
-- Full UI lint, test, and build validation must pass in CI before this stage is considered complete.
+- UI tests cover pending status with Moomoo-only float evidence and the on-demand history action.
+- UIHub tests cover bounded archive reads, symbol normalization, partial archive failures, missing archive capability, and asynchronous query routing.
+- Full UI lint, test, and build validation plus engine tests and contract-drift validation must pass in CI before this stage is considered complete.
+
+## First-run operator checklist
+
+1. Enable Scanner panels in Gainers, Most Active, and Session Volume modes.
+2. Add the **Ross Candidates** panel. Confirm duplicate symbols appear once with all discovery-source labels.
+3. Expand a candidate and click **Load archived bars**. The panel should update its history counts and eligibility checks. If the newest archived one-minute bar is stale, the freshness check should remain unknown; loading history is not a live subscription.
+4. Confirm Moomoo-only share figures remain `PENDING` for free float, even when the share count is below 100 million.
+5. Confirm the panel does not alter Scanner filters, start chart subscriptions, or submit orders.
