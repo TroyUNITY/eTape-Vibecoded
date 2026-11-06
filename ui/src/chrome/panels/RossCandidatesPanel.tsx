@@ -22,6 +22,7 @@ interface EvaluatedCandidate {
   result: CandidateEligibilityResult;
   retained: RetainedCandidateRecord | null;
   currentlyDiscovered: boolean;
+  liveMonitoringRequested: boolean;
 }
 
 const RETAINED_CANDIDATES_SETTING = "rossRetainedCandidates";
@@ -448,6 +449,7 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
         <div style={{ color: palette.textMuted, marginTop: 4, fontSize: 10 }}>
           Combined discovery from active Gainers, Most Active and Session Volume Scanner panels
           <span style={{ marginLeft: 8, color: palette.text }}>· {retainedCandidates.length} retained</span>
+          <span style={{ marginLeft: 8, color: palette.accent }}>· {liveMonitorSymbols.length}/{MAX_CANDIDATE_MONITOR_SYMBOLS} live monitors</span>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 1, marginTop: 8, background: palette.border }}>
           {[
@@ -470,7 +472,7 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
         </div>
       ) : (
         <div style={{ padding: "4px 8px 8px" }}>
-          {evaluated.map(({ candidate, result, retained, currentlyDiscovered }) => (
+          {evaluated.map(({ candidate, result, retained, currentlyDiscovered, liveMonitoringRequested }) => (
             <details key={candidate.symbol} style={{ borderBottom: "1px solid " + palette.border }}>
               <summary style={{ display: "grid", gridTemplateColumns: "minmax(70px, 1fr) minmax(50px, auto) minmax(50px, auto) auto", alignItems: "center", gap: 8, padding: "9px 3px", cursor: "pointer", listStylePosition: "inside" }}>
                 <span className="mono" style={{ fontWeight: 700, minWidth: 0 }}>{candidate.symbol}</span>
@@ -499,6 +501,11 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
                       NOT IN CURRENT SCANNERS
                     </span>
                   )}
+                  {liveMonitoringRequested && (
+                    <span style={{ border: "1px solid " + palette.accent, color: result.checks.find((item) => item.id === "intraday-data-freshness")?.state === "pass" ? palette.ok : palette.accent, padding: "2px 5px", fontSize: 9 }}>
+                      {result.checks.find((item) => item.id === "intraday-data-freshness")?.state === "pass" ? "LIVE 1M FRESH" : "LIVE 1M REQUESTED"}
+                    </span>
+                  )}
                 </div>
                 {retained && !currentlyDiscovered && (
                   <div style={{ color: palette.textMuted, fontSize: 9, marginBottom: 7 }}>
@@ -519,6 +526,31 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
                   >
                     {historyLoading[candidate.symbol] ? "Loading archived bars…" : historyBySymbol[candidate.symbol] ? "Refresh archived bars" : "Load archived bars"}
                   </button>
+                  {retained && (liveMonitoringRequested ? (
+                    <button
+                      type="button"
+                      onClick={() => stopLiveMonitoring(candidate.symbol)}
+                      style={{ border: "1px solid " + palette.borderStrong, background: palette.surface, color: palette.accent, padding: "5px 8px", fontSize: 10, cursor: "pointer" }}
+                    >
+                      Stop live monitor
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!demandRegistry || !candidate.symbol.startsWith("US.") || liveMonitorSymbols.length >= MAX_CANDIDATE_MONITOR_SYMBOLS}
+                      onClick={() => startLiveMonitoring(candidate.symbol)}
+                      title={!demandRegistry
+                        ? "Live monitoring is not available in this panel context."
+                        : !candidate.symbol.startsWith("US.")
+                          ? "Live candidate monitoring currently supports US symbols only."
+                          : liveMonitorSymbols.length >= MAX_CANDIDATE_MONITOR_SYMBOLS
+                            ? `The live-monitor shortlist is limited to ${MAX_CANDIDATE_MONITOR_SYMBOLS} symbols.`
+                            : "Request live one-minute bars for this retained candidate."}
+                      style={{ border: "1px solid " + palette.borderStrong, background: palette.surface, color: palette.text, padding: "5px 8px", fontSize: 10, cursor: "pointer", opacity: !demandRegistry || !candidate.symbol.startsWith("US.") || liveMonitorSymbols.length >= MAX_CANDIDATE_MONITOR_SYMBOLS ? 0.5 : 1 }}
+                    >
+                      Monitor live (1m)
+                    </button>
+                  ))}
                   {retained ? (
                     <button
                       type="button"
@@ -544,6 +576,18 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
                     Archive notice: {historyBySymbol[candidate.symbol]!.error}
                   </div>
                 )}
+                {monitorErrors[candidate.symbol] && (
+                  <div style={{ color: palette.danger, fontSize: 10, lineHeight: 1.4, marginBottom: 7 }}>
+                    Live-monitor notice: {monitorErrors[candidate.symbol]}
+                  </div>
+                )}
+                {liveMonitoringRequested && (
+                  <div style={{ color: palette.textMuted, fontSize: 10, lineHeight: 1.4, marginBottom: 7 }}>
+                    {result.checks.find((item) => item.id === "intraday-data-freshness")?.state === "pass"
+                      ? "Fresh one-minute updates are reaching this candidate."
+                      : "The live-monitor demand is requested, but fresh one-minute data has not arrived yet. The freshness check remains unknown until it does."}
+                  </div>
+                )}
                 <div style={{ color: palette.textMuted, fontSize: 9, letterSpacing: ".05em", marginBottom: 3 }}>ELIGIBILITY CHECKS</div>
                 {result.checks.map((check) => (
                   <div key={check.id} style={{ display: "grid", gridTemplateColumns: "minmax(110px, .7fr) minmax(0, 1.5fr) auto", gap: 7, padding: "4px 0", borderTop: "1px solid " + palette.border, alignItems: "start" }}>
@@ -564,7 +608,7 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
       )}
 
       <div style={{ padding: "8px 10px", borderTop: "1px solid " + palette.borderStrong, color: palette.textMuted, fontSize: 10, lineHeight: 1.45 }}>
-        Candidates can be kept manually on this panel's persistent shortlist; fully ELIGIBLE candidates are retained automatically. Retained candidates remain through PENDING data states and are removed automatically only when a current scanner observation proves REJECTED. This is retention, not yet continuous live monitoring: fresh one-minute subscriptions are a separate next stage. Moomoo OutstandingShares remains an unverified proxy, and nearby resistance and technical-breakout detection are not connected. This panel is informational and never places orders.
+        Retained candidates persist independently of scanner rankings. You can request live one-minute monitoring for up to {MAX_CANDIDATE_MONITOR_SYMBOLS} retained US symbols; requests use the engine's shared quota-aware demand manager and are released when stopped or when this panel closes. "LIVE 1M FRESH" means a recent minute bar has actually arrived; accepted requests without fresh data remain unknown/PENDING for the freshness criterion. Archived and live candles are merged with live updates taking precedence. Moomoo OutstandingShares remains an unverified proxy, and nearby resistance and technical-breakout detection are not connected. This panel is informational and never places orders.
       </div>
     </div>
   );
