@@ -57,7 +57,7 @@ export function RossCandidatesPanel({ stores }: PanelProps): JSX.Element {
       timer = setTimeout(() => {
         timer = null;
         setRevision((value) => value + 1);
-      }, 2_000);
+      }, 250);
     };
     const off = [
       stores.scanner.subscribe(refresh),
