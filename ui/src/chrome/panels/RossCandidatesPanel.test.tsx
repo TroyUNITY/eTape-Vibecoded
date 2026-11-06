@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ThemeProvider } from "../ThemeProvider";
 import { makeStores } from "../../data/registry";
 import { RossCandidatesPanel } from "./RossCandidatesPanel";
@@ -43,7 +43,24 @@ describe("RossCandidatesPanel", () => {
       linkGroups: {} as never,
       commands: {
         sendCommand: async () => ({ status: "accepted" }),
-        sendQuery: async () => ({}),
+        sendQuery: vi.fn(async () => ({
+          symbol: "US.TEST",
+          asOfMs: Date.now(),
+          oneMinuteBars: [{
+            symbol: "US.TEST",
+            timeframe: "1m",
+            bucketStart: new Date(Date.now() - 60_000).toISOString(),
+            o: 5, h: 5.1, l: 4.9, c: 5, v: 1000,
+            inProgress: false,
+          }],
+          dailyBars: [{
+            symbol: "US.TEST",
+            timeframe: "D",
+            bucketStart: "2026-11-05T00:00:00.000Z",
+            o: 4, h: 5.2, l: 3.9, c: 5, v: 100000,
+            inProgress: false,
+          }],
+        })),
       },
       onConfigChange: () => {},
     } as unknown as PanelProps;
