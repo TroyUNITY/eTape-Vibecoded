@@ -1,4 +1,4 @@
-import type { Bar, ScannerRow, StockDetailPayload, ScannerRankPayload } from "../wire/contract";
+import type { Bar, ScannerRow, ScannerRankPayload } from "../wire/contract";
 import type { ScannerRowView } from "../data/ScannerStore";
 import type { BarStore } from "../data/BarStore";
 import type { StockDetailStore } from "../data/StockDetailStore";
@@ -196,8 +196,6 @@ export class StrategyScannerRuntime {
   ): Map<string, StrategyScannerRow> {
     const output = new Map<string, StrategyScannerRow>();
     const limited = Math.max(0, Math.floor(maxCandidates));
-    const active = new Set(rows.slice(0, limited).map((row) => row.symbol));
-
     rows.forEach((row, index) => {
       if (index >= limited) {
         output.set(row.symbol, unknownStrategyScannerRow(row.symbol,
