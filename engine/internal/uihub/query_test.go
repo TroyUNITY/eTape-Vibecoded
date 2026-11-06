@@ -45,7 +45,6 @@ func (s *spyFills) ExportFills(_ context.Context, venue string, fromMs, toMs int
 	return s.exportRowsMulti, s.exportErr
 }
 
-
 type spyCandidateHistory struct {
 	*spyFills
 	oneMinute []feed.Bar
