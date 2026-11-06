@@ -923,6 +923,16 @@ export interface QueryChartWindowResult {
  * historical trade reports. Exactly one explicit half-open UTC range is used;
  * the backend enforces a bounded lookback and accepts only 1m or 5m.
  */
+export interface QueryCandidateHistoryArgs {
+  symbol: string;
+}
+export interface QueryCandidateHistoryResult {
+  symbol: string;
+  asOfMs: number /* int64 */;
+  oneMinuteBars: Bar[];
+  dailyBars: Bar[];
+  error?: string;
+}
 export interface QueryFilteredChartWindowArgs {
   symbol: string;
   timeframe: string;
