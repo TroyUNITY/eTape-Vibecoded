@@ -229,7 +229,7 @@ export function PanelFrame(
   // panels. A pinned panel's own settings.symbol is a snapshot from panel
   // creation — full live editing of it is Task 13's type-to-load work.
   const props: PanelProps = { config, stores, scheduler, width: size.width, height: size.height,
-    linkGroups, commands, onConfigChange, active, onGroupChange, group,
+    linkGroups, commands, demandRegistry, onConfigChange, active, onGroupChange, group,
     ...(config.panelId === "scanner" ? { scannerId: `${workspaceId ?? "legacy"}/${config.id}` } : {}),
     ...(monitoring === undefined ? {} : { monitoring }), ...(scannerSync ? { scannerSync } : {}), ...(rawSymbol ? { symbol: rawSymbol } : {}) };
   useEffect(() => { symbolRef.current = rawSymbol; }, [rawSymbol]);
