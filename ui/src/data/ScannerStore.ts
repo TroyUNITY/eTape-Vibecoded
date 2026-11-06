@@ -1,12 +1,19 @@
 import { ReactStore } from "./store";
 import type {
-  SnapshotMsg, DeltaMsg, ScannerRow, ScannerRankPayload, ScannerSession,
+  SnapshotMsg, DeltaMsg, ScannerRow, ScannerRankPayload, ScannerSession, ScannerFilters,
 } from "../wire/contract";
 
 export interface ScannerRowView extends ScannerRow { isUnseen: boolean; isNewHit: boolean; muted: boolean }
 export interface ScannerSessionView { rows: ScannerRowView[]; refreshedAt: string | null; discoveryAt: string | null; status: ScannerRankPayload["status"] | null; filters: ScannerRankPayload["filters"] | null }
 interface ScannerState { sessions: Record<string, ScannerSessionView> }
 export interface CurrentScannerView { session: ScannerSession | null; rows: ScannerRowView[]; refreshedAt: string | null; discoveryAt: string | null; status: ScannerRankPayload["status"] | null; filters: ScannerRankPayload["filters"] | null }
+export type MomentumScannerMode = Extract<ScannerFilters["mode"], "gainers" | "most_active" | "session_volume">;
+export interface MomentumScannerCandidate extends ScannerRowView {
+  sourceModes: MomentumScannerMode[];
+  scannerIds: string[];
+  session: ScannerSession;
+  refreshedAt: string;
+}
 const LEGACY_SCANNER = "legacy";
 
 // Rows are keyed by stable workspace/panel identity and session. Legacy
@@ -133,6 +140,79 @@ export class ScannerStore extends ReactStore<ScannerState> {
     if (!best) return { session: null, rows: [], refreshedAt: null, discoveryAt: null, status: null, filters: null };
     const v = sessions[`${scannerId}/${best}`]!;
     return { session: best, rows: v.rows, refreshedAt: v.refreshedAt, discoveryAt: v.discoveryAt, status: v.status, filters: v.filters };
+  }
+
+  /**
+   * Combines the freshest active Gainers, Most Active, and Session Volume
+   * boards across all Scanner panels. Each panel contributes only its freshest
+   * session, and duplicate symbols retain the newest row while accumulating
+   * their discovery sources. Losers boards are deliberately excluded.
+   */
+  momentumCandidates(): MomentumScannerCandidate[] {
+    const latestByScanner = new Map<string, {
+      scannerId: string;
+      session: ScannerSession;
+      view: ScannerSessionView;
+      timestamp: number;
+      mode: MomentumScannerMode;
+    }>();
+
+    for (const [key, view] of Object.entries(this.getSnapshot().sessions)) {
+      const separator = key.lastIndexOf("/");
+      if (separator <= 0) continue;
+      const scannerId = key.slice(0, separator);
+      const mode = view.filters?.mode;
+      if (mode !== "gainers" && mode !== "most_active" && mode !== "session_volume") continue;
+      if (view.status !== "ready" && view.status !== "delayed") continue;
+
+      const parsed = view.refreshedAt ? Date.parse(view.refreshedAt) : -Infinity;
+      const timestamp = Number.isFinite(parsed) ? parsed : -Infinity;
+      const existing = latestByScanner.get(scannerId);
+      if (existing && existing.timestamp >= timestamp) continue;
+      latestByScanner.set(scannerId, {
+        scannerId,
+        session: key.slice(separator + 1) as ScannerSession,
+        view,
+        timestamp,
+        mode,
+      });
+    }
+
+    const bySymbol = new Map<string, MomentumScannerCandidate>();
+    const selected = [...latestByScanner.values()].sort((a, b) => a.scannerId.localeCompare(b.scannerId));
+    for (const board of selected) {
+      for (const row of board.view.rows) {
+        const existing = bySymbol.get(row.symbol);
+        if (!existing) {
+          bySymbol.set(row.symbol, {
+            ...row,
+            sourceModes: [board.mode],
+            scannerIds: [board.scannerId],
+            session: board.session,
+            refreshedAt: board.view.refreshedAt,
+          });
+          continue;
+        }
+
+        const sourceModes = existing.sourceModes.includes(board.mode)
+          ? existing.sourceModes
+          : [...existing.sourceModes, board.mode];
+        const scannerIds = existing.scannerIds.includes(board.scannerId)
+          ? existing.scannerIds
+          : [...existing.scannerIds, board.scannerId];
+        const existingTime = existing.refreshedAt ? Date.parse(existing.refreshedAt) : -Infinity;
+        const preferNewer = board.timestamp > (Number.isFinite(existingTime) ? existingTime : -Infinity);
+        bySymbol.set(row.symbol, {
+          ...(preferNewer ? row : existing),
+          sourceModes,
+          scannerIds,
+          session: preferNewer ? board.session : existing.session,
+          refreshedAt: preferNewer ? board.view.refreshedAt : existing.refreshedAt,
+        });
+      }
+    }
+
+    return [...bySymbol.values()].sort((a, b) => a.symbol.localeCompare(b.symbol));
   }
 
   resetSeen(session?: ScannerSession, scannerId = LEGACY_SCANNER): void {
