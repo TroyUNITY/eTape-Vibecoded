@@ -72,12 +72,15 @@ export function TradeGuardPanel({ config, stores, linkGroups, group: groupProp, 
         .filter((row) => row.symbol === symbol)
         .map((row) => ({ row, refreshedAt: view.refreshedAt })))
       .sort((a, b) => Date.parse(b.refreshedAt ?? "") - Date.parse(a.refreshedAt ?? ""));
+    const detail = stores.stockDetail.detailFor(symbol);
+    const scannerRow = scannerRows[0]?.row;
+    const lastPrice = stores.quote.get(symbol)?.last;
     return trackerRef.current.evaluate({
       bars: stores.bars.allSeries(symbol, "1m"),
       dailyBars: stores.bars.allSeries(symbol, "D"),
-      detail: stores.stockDetail.detailFor(symbol),
-      scannerRow: scannerRows[0]?.row,
-      lastPrice: stores.quote.get(symbol)?.last,
+      ...(detail ? { detail } : {}),
+      ...(scannerRow ? { scannerRow } : {}),
+      ...(lastPrice !== undefined ? { lastPrice } : {}),
     });
   }, [symbol, barsRev, dailyRev, detailSnapshot, quoteRev, scannerSnapshot, stores]);
 

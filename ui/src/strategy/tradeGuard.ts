@@ -490,9 +490,10 @@ export function evaluateTradeGuard(input: TradeGuardInput): TradeGuardResult {
   const current = bars[currentIndex];
   const currentMs = barMs(current);
   const currentDay = dateKey(currentMs);
+  const detailPrice = input.detail?.price;
   const price = finite(input.lastPrice) && input.lastPrice > 0
     ? input.lastPrice
-    : finite(input.detail?.price) && input.detail.price > 0 ? input.detail.price : current.c;
+    : finite(detailPrice) && detailPrice > 0 ? detailPrice : current.c;
   const tick = price < 1 ? 0.0001 : 0.01;
   const ind = calculateIndicators(bars);
 
@@ -517,27 +518,30 @@ export function evaluateTradeGuard(input: TradeGuardInput): TradeGuardResult {
     .slice()
     .sort((a, b) => barMs(a) - barMs(b));
   const previousDaily = dailyBars[dailyBars.length - 1];
-  const previousClose = finite(input.detail?.lastClose) && input.detail.lastClose > 0
-    ? input.detail.lastClose
+  const detailLastClose = input.detail?.lastClose;
+  const previousClose = finite(detailLastClose) && detailLastClose > 0
+    ? detailLastClose
     : previousDaily?.c ?? null;
-  const dayChangePct = finite(input.detail?.changePct)
-    ? input.detail.changePct
-    : previousClose && previousClose > 0 ? ((price / previousClose) - 1) * 100 : null;
-  const floatShares = finite(input.detail?.floatShares) && input.detail.floatShares > 0
-    ? input.detail.floatShares
-    : finite(input.scannerRow?.floatShares) && input.scannerRow.floatShares > 0 ? input.scannerRow.floatShares : null;
+  const detailChangePct = input.detail?.changePct;
+  const scannerChangePct = input.scannerRow?.changePct;
+  const dayChangePct = finite(detailChangePct) ? detailChangePct
+    : previousClose !== null && previousClose > 0 ? ((price / previousClose) - 1) * 100
+      : finite(scannerChangePct) ? scannerChangePct : null;
+  const detailFloatShares = input.detail?.floatShares;
+  const scannerFloatShares = input.scannerRow?.floatShares;
+  const floatShares = finite(detailFloatShares) && detailFloatShares > 0
+    ? detailFloatShares
+    : finite(scannerFloatShares) && scannerFloatShares > 0 ? scannerFloatShares : null;
 
   const pricePassed = eligibilityPrice >= settings.minPrice && eligibilityPrice <= settings.maxPrice;
-  const floatKnown = floatShares !== null;
-  const floatPassed = floatKnown && floatShares <= settings.maxFloatShares;
-  const changeKnown = dayChangePct !== null;
-  const changePassed = changeKnown && dayChangePct >= settings.minDayChange;
-  const rvolKnown = rvol.value !== null;
-  const rvolPassed = rvolKnown && rvol.value >= settings.minRelativeVolume;
+  const floatPassed = floatShares !== null && floatShares <= settings.maxFloatShares;
+  const changePassed = dayChangePct !== null && dayChangePct >= settings.minDayChange;
+  const rvolPassed = rvol.value !== null && rvol.value >= settings.minRelativeVolume;
   const activityPassed = sessionVolume >= settings.minSessionVolume;
-  const floatSuspect = floatKnown && floatShares < 100_000;
-  const rvolSuspect = rvolKnown && (rvol.value > 500 || !(rvol.averageVolume && rvol.averageVolume > 0));
-  const dataUncertain = !floatKnown || !rvolKnown || floatSuspect || rvolSuspect;
+  const floatSuspect = floatShares !== null && floatShares < 100_000;
+  const rvolSuspect = rvol.value !== null &&
+    (rvol.value > 500 || !(rvol.averageVolume && rvol.averageVolume > 0));
+  const dataUncertain = floatShares === null || rvol.value === null || floatSuspect || rvolSuspect;
   const stockPassed = pricePassed && floatPassed && changePassed && rvolPassed && activityPassed;
 
   const entry = candidate?.trigger ?? null;
@@ -600,13 +604,13 @@ export function evaluateTradeGuard(input: TradeGuardInput): TradeGuardResult {
   const warnings: string[] = [];
   if (!pricePassed) reasons.push("Proposed trigger price is outside the configured $" +
     fmt(settings.minPrice) + "–$" + fmt(settings.maxPrice) + " range.");
-  if (!floatKnown) reasons.push("Free-float data is unavailable.");
+  if (floatShares === null) reasons.push("Free-float data is unavailable.");
   else if (!floatPassed) reasons.push("Float " + fmt(floatShares / 1_000_000, 2) +
     "M exceeds the " + fmt(settings.maxFloatShares / 1_000_000, 1) + "M limit.");
-  if (!changeKnown) reasons.push("Gain from the previous close is unavailable.");
+  if (dayChangePct === null) reasons.push("Gain from the previous close is unavailable.");
   else if (!changePassed) reasons.push("Daily gain " + fmt(dayChangePct, 1) +
     "% is below " + fmt(settings.minDayChange, 1) + "%.");
-  if (!rvolKnown) reasons.push(rvol.reason || "Same-time relative volume is unavailable.");
+  if (rvol.value === null) reasons.push(rvol.reason || "Same-time relative volume is unavailable.");
   else if (!rvolPassed) reasons.push("Same-time RVOL " + fmt(rvol.value, 1) +
     "x is below " + fmt(settings.minRelativeVolume, 1) + "x.");
   if (!activityPassed) reasons.push("Session volume " + Math.round(sessionVolume).toLocaleString("en-US") +
@@ -673,13 +677,13 @@ export function evaluateTradeGuard(input: TradeGuardInput): TradeGuardResult {
   const checks: GuardCheck[] = [
     check("price", "Price range", pricePassed, "Eligibility price $" + fmt(eligibilityPrice) +
       "; configured range $" + fmt(settings.minPrice) + "–$" + fmt(settings.maxPrice) + "."),
-    check("float", "Free float", floatKnown ? floatPassed : null, floatKnown
+    check("float", "Free float", floatShares === null ? null : floatPassed, floatShares !== null
       ? fmt(floatShares / 1_000_000, 2) + "M shares; maximum " + fmt(settings.maxFloatShares / 1_000_000, 1) + "M."
       : "Moomoo or scanner float is unavailable."),
-    check("change", "Gain from previous close", changeKnown ? changePassed : null, changeKnown
+    check("change", "Gain from previous close", dayChangePct === null ? null : changePassed, dayChangePct !== null
       ? fmt(dayChangePct, 1) + "%; minimum " + fmt(settings.minDayChange, 1) + "%."
       : "Previous close or current change is unavailable."),
-    check("rvol", "Same-time relative volume", rvolKnown ? rvolPassed : null, rvolKnown
+    check("rvol", "Same-time relative volume", rvol.value === null ? null : rvolPassed, rvol.value !== null
       ? fmt(rvol.value, 1) + "x from " + rvol.observations + " comparable sessions."
       : rvol.reason),
     check("session-volume", "Session activity", activityPassed, Math.round(sessionVolume).toLocaleString("en-US") +
