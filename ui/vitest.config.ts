@@ -107,6 +107,16 @@ export default defineConfig({
         },
       },
       {
+        extends: true,
+        test: {
+          name: 'strategy',
+          include: [
+            'src/strategy/candidateEligibility.test.ts',
+            'src/chrome/panels/RossCandidatesPanel.test.tsx',
+          ],
+        },
+      },
+      {
         test: {
           name: 'golden',
           include: ['test/golden/**/*.test.ts', 'test/golden/**/*.golden.test.ts'],
