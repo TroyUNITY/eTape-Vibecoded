@@ -320,21 +320,21 @@ func (q *queries) candidateHistoryWindow(ctx context.Context, raw json.RawMessag
 	}
 	args.Symbol = strings.ToUpper(strings.TrimSpace(args.Symbol))
 	if args.Symbol == "" || len(args.Symbol) > 32 || strings.IndexFunc(args.Symbol, func(r rune) bool { return r <= ' ' }) >= 0 {
-		return candidateHistoryResult{OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: "a valid symbol is required"}
+		return wsmsg.QueryCandidateHistoryResult{OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: "a valid symbol is required"}
 	}
 	if q.candidateHistory == nil {
-		return candidateHistoryResult{Symbol: args.Symbol, OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: "local candidate history is unavailable"}
+		return wsmsg.QueryCandidateHistoryResult{Symbol: args.Symbol, OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: "local candidate history is unavailable"}
 	}
 
 	select {
 	case q.candidateHistorySlots <- struct{}{}:
 		defer func() { <-q.candidateHistorySlots }()
 	case <-ctx.Done():
-		return candidateHistoryResult{Symbol: args.Symbol, OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: ctx.Err().Error()}
+		return wsmsg.QueryCandidateHistoryResult{Symbol: args.Symbol, OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: ctx.Err().Error()}
 	}
 
 	now := q.clk.Now()
-	out := candidateHistoryResult{
+	out := wsmsg.QueryCandidateHistoryResult{
 		Symbol: args.Symbol, AsOfMs: now.UnixMilli(),
 		OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{},
 	}
