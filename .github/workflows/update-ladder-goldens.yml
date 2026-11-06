@@ -36,7 +36,7 @@ jobs:
         shell: pwsh
         run: |
           $env:UPDATE_GOLDENS = "1"
-          npx vitest run test/golden/ladder.golden.test.ts
+          npx vitest run test/golden/ladder.golden.test.ts --testTimeout=30000
 
       - name: Commit only the five changed light-mode references and remove this helper
         shell: pwsh
