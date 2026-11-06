@@ -38,18 +38,6 @@ type candidateHistoryReader interface {
 	ReadRecentDailyBars(symbol string, limit int) ([]feed.Bar, error)
 }
 
-type candidateHistoryArgs struct {
-	Symbol string `json:"symbol"`
-}
-
-type candidateHistoryResult struct {
-	Symbol        string     `json:"symbol"`
-	AsOfMs        int64      `json:"asOfMs"`
-	OneMinuteBars []wsmsg.Bar `json:"oneMinuteBars"`
-	DailyBars     []wsmsg.Bar `json:"dailyBars"`
-	Error         string     `json:"error,omitempty"`
-}
-
 const (
 	candidateHistoryOneMinuteLimit = 15000
 	candidateHistoryDailyLimit     = 260
@@ -325,10 +313,10 @@ func (q *queries) handleContext(ctx context.Context, name string, args json.RawM
 // candidateHistoryWindow reads already-archived bars for one expanded
 // Ross candidate. It is deliberately query-on-demand (not a stream or chart
 // subscription) and bounded to the latest 15,000 one-minute + 260 daily bars.
-func (q *queries) candidateHistoryWindow(ctx context.Context, raw json.RawMessage) candidateHistoryResult {
-	var args candidateHistoryArgs
+func (q *queries) candidateHistoryWindow(ctx context.Context, raw json.RawMessage) wsmsg.QueryCandidateHistoryResult {
+	var args wsmsg.QueryCandidateHistoryArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
-		return candidateHistoryResult{OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: "invalid request"}
+		return wsmsg.QueryCandidateHistoryResult{OneMinuteBars: []wsmsg.Bar{}, DailyBars: []wsmsg.Bar{}, Error: "invalid request"}
 	}
 	args.Symbol = strings.ToUpper(strings.TrimSpace(args.Symbol))
 	if args.Symbol == "" || len(args.Symbol) > 32 || strings.IndexFunc(args.Symbol, func(r rune) bool { return r <= ' ' }) >= 0 {
