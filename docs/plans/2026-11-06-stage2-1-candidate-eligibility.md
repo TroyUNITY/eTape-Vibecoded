@@ -40,7 +40,7 @@ The pure function `evaluateRossMomentumCandidate` receives:
 - An explicit assessment of nearby resistance.
 - Explicit catalyst evidence: fundamental, technical breakout, none, or unknown.
 
-It returns per-condition checks, reasons, warnings, metrics and one of three statuses:
+It requires the latest one-minute candle to be no more than five minutes old (aligned with the existing Strategy Scanner prototype). Stale or missing intraday candles produce an unknown freshness check.\n\nIt returns per-condition checks, reasons, warnings, metrics and one of three statuses:
 
 | Status | Meaning | Eligible for active monitoring? |
 |---|---|---|
