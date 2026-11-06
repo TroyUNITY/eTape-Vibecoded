@@ -67,6 +67,17 @@ describe("analyzeCandidateTechnicalContext — resistance", () => {
     expect(result.resistance.distancePct).toBeCloseTo(2);
   });
 
+  it("treats a price exactly at a daily resistance level as nearby", () => {
+    const result = analyzeCandidateTechnicalContext({
+      price: 5.1,
+      dailyBars: dailyBars(25, 5.1),
+      oneMinuteBars: [],
+      asOfMs: Date.parse("2026-11-05T15:00:00-05:00"),
+    });
+    expect(result.resistance.nearby).toBe(true);
+    expect(result.resistance.distancePct).toBe(0);
+  });
+
   it("passes when the current price is above all assessed daily levels", () => {
     const result = analyzeCandidateTechnicalContext({
       price: 6,
