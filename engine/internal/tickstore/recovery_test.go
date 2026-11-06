@@ -48,7 +48,7 @@ func archiveFiles(t *testing.T, dir string) []string {
 
 func TestFailedAtomicSourceGroupPausesAndRecoversWithGap(t *testing.T) {
 	dir := t.TempDir()
-	s, err := tickstore.Open(tickstore.Options{Directory: dir, MinFreeBytes: 1, FlushInterval: 20 * time.Millisecond,
+	s, err := tickstore.Open(tickstore.Options{Directory: dir, MinFreeBytes: 1, FlushInterval: 200 * time.Millisecond,
 		Decode: func(r feed.Recording) ([]feed.Recording, error) {
 			return []feed.Recording{r, {Kind: "print", Source: r.Source, Sequence: 7}}, nil
 		}})
@@ -60,6 +60,14 @@ func TestFailedAtomicSourceGroupPausesAndRecoversWithGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	// The archive writer retries failed commits periodically. Give the test
+	// connection a bounded wait for those short WAL writer transactions, and
+	// keep this test's retry interval long enough to remove the injected fault
+	// deterministically after observing the paused state.
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec("CREATE TRIGGER reject_print BEFORE INSERT ON observations WHEN NEW.kind='print' BEGIN SELECT RAISE(ABORT,'fixture disk failure'); END"); err != nil {
 		t.Fatal(err)
 	}
