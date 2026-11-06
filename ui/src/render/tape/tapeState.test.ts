@@ -111,7 +111,7 @@ describe("buildTapeRows", () => {
     expect(rows[0].price).toBe("0.1234");
   });
 
-  it.each([[1, "1.00"], [0, "0.00"], [0.99996, "1.0000"]] as const("formats the raw boundary price %s as %s", (price, want) => {
+  it.each([[1, "1.00"], [0, "0.00"], [0.99996, "1.0000"]] as const)("formats the raw boundary price %s as %s", (price, want) => {
     const one = srcFrom([mkTick(1, { price })]);
     expect(buildTapeRows(one, liveView(one), {
       symbol: "US.AAPL", minSize: 0, maxRows: 1,
