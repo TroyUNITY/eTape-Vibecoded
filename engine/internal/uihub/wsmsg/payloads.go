@@ -869,6 +869,20 @@ type QueryChartWindowResult struct {
 // QueryFilteredChartWindowArgs requests a chart-only reconstruction from
 // historical trade reports. Exactly one explicit half-open UTC range is used;
 // the backend enforces a bounded lookback and accepts only 1m or 5m.
+// QueryCandidateHistoryArgs requests a bounded read of the existing local
+// market-data archive for one candidate. It never creates a subscription.
+type QueryCandidateHistoryArgs struct {
+	Symbol string `json:"symbol"`
+}
+
+type QueryCandidateHistoryResult struct {
+	Symbol        string `json:"symbol"`
+	AsOfMs        int64  `json:"asOfMs"`
+	OneMinuteBars []Bar  `json:"oneMinuteBars"`
+	DailyBars     []Bar  `json:"dailyBars"`
+	Error         string `json:"error,omitempty"`
+}
+
 type QueryFilteredChartWindowArgs struct {
 	Symbol       string  `json:"symbol"`
 	Timeframe    string  `json:"timeframe"`
