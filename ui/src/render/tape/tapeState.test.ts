@@ -80,10 +80,10 @@ describe("buildTapeRows", () => {
     expect(rows[0].seq).toBe(src.lastSeq());
   });
 
-  it("formats rows: ET time, fixed 3-decimal price, grouped sizes", () => {
+  it("formats rows: ET time, 2-decimal normal price, grouped sizes", () => {
     const one = srcFrom([mkTick(1, { price: 3.5, size: 1428, ts: "2026-07-06T13:30:05Z" })]);
     const { rows } = buildTapeRows(one, liveView(one), { symbol: "US.AAPL", minSize: 0, maxRows: 1 });
-    expect(rows[0]).toMatchObject({ time: "09:30:05", price: "3.500", size: "1,428" });
+    expect(rows[0]).toMatchObject({ time: "09:30:05", price: "3.50", size: "1,428" });
   });
 
   it("formats mixed rows by their own price, including older sub-dollar prints", () => {
@@ -95,7 +95,7 @@ describe("buildTapeRows", () => {
     const { rows } = buildTapeRows(one, liveView(one), {
       symbol: "US.AAPL", minSize: 0, maxRows: 3,
     });
-    expect(rows.map((row) => row.price)).toEqual(["0.2500", "2.500", "0.1234"]);
+    expect(rows.map((row) => row.price)).toEqual(["0.2500", "2.50", "0.1234"]);
   });
 
   it("keeps paused filtered history precision independent of the latest price", () => {
@@ -111,7 +111,7 @@ describe("buildTapeRows", () => {
     expect(rows[0].price).toBe("0.1234");
   });
 
-  it.each([[1, "1.000"], [0, "0.000"], [0.99996, "1.0000"]] as const)("formats the raw boundary price %s as %s", (price, want) => {
+  it.each([[1, "1.00"], [0, "0.00"], [0.99996, "1.0000"]] as const)("formats the raw boundary price %s as %s", (price, want) => {
     const one = srcFrom([mkTick(1, { price })]);
     expect(buildTapeRows(one, liveView(one), {
       symbol: "US.AAPL", minSize: 0, maxRows: 1,
