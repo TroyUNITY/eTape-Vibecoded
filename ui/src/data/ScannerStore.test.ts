@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { ScannerStore } from "./ScannerStore";
-import type { ScannerRankPayload, ScanHitPayload, SnapshotMsg, DeltaMsg } from "../wire/contract";
+import type { ScannerRankPayload, ScanHitPayload, ScannerFilters, SnapshotMsg, DeltaMsg } from "../wire/contract";
 
 const rank = (kind: "snapshot" | "delta", session: string, payload: Partial<ScannerRankPayload>, scannerId = "legacy") =>
   ({ kind, topic: "scanner.rank", key: `${scannerId}/${session}`, payload: {
@@ -201,5 +201,90 @@ describe("ScannerStore.currentView", () => {
     expect(s.currentView().session).toBe("rth");
     s.apply(rank("snapshot", "afterhours", { refreshedAt: iso(17), rows: [r("C", 4)] }));
     expect(s.currentView().session).toBe("afterhours");
+  });
+});
+
+
+const filtersFor = (mode: ScannerFilters["mode"]): ScannerFilters => ({
+  mode,
+  minChangePct: 0,
+  maxFloatShares: null,
+  minVolume: 0,
+  minSessionVolume: 0,
+  minTurnover: 0,
+  minRelativeVolume: 0,
+  minPrice: 0,
+  maxPrice: 0,
+  floatUnit: "M",
+  volumeUnit: "K",
+  sessionVolumeUnit: "K",
+});
+
+describe("ScannerStore.momentumCandidates", () => {
+  it("merges symbols across Gainers, Most Active and Session Volume boards", () => {
+    const s = new ScannerStore();
+    s.apply(rank("snapshot", "rth", {
+      refreshedAt: "2026-11-06T14:00:00.000Z",
+      filters: filtersFor("gainers"),
+      rows: [r("US.AAA", 12), r("US.SHARED", 5)],
+    }, "main/gainers"));
+    s.apply(rank("snapshot", "rth", {
+      refreshedAt: "2026-11-06T14:00:01.000Z",
+      filters: filtersFor("most_active"),
+      rows: [r("US.BBB", 4), r("US.SHARED", 6)],
+    }, "main/active"));
+    s.apply(rank("snapshot", "rth", {
+      refreshedAt: "2026-11-06T14:00:02.000Z",
+      filters: filtersFor("session_volume"),
+      rows: [r("US.CCC", 3), r("US.SHARED", 7)],
+    }, "main/session"));
+
+    const candidates = s.momentumCandidates();
+    expect(candidates.map((item) => item.symbol)).toEqual(["US.AAA", "US.BBB", "US.CCC", "US.SHARED"]);
+    expect(candidates.find((item) => item.symbol === "US.SHARED")?.sourceModes).toEqual([
+      "gainers", "most_active", "session_volume",
+    ]);
+    expect(candidates.find((item) => item.symbol === "US.SHARED")?.scannerIds).toEqual([
+      "main/gainers", "main/active", "main/session",
+    ]);
+    // The combined row comes from the freshest of the contributing boards.
+    expect(candidates.find((item) => item.symbol === "US.SHARED")?.changePct).toBe(7);
+  });
+
+  it("excludes Losers boards from momentum discovery", () => {
+    const s = new ScannerStore();
+    s.apply(rank("snapshot", "rth", {
+      refreshedAt: "2026-11-06T14:00:00.000Z",
+      filters: filtersFor("losers"),
+      rows: [r("US.DOWN", -12)],
+    }, "main/losers"));
+    expect(s.momentumCandidates()).toEqual([]);
+  });
+
+  it("uses only the freshest session from each Scanner panel", () => {
+    const s = new ScannerStore();
+    s.apply(rank("snapshot", "premarket", {
+      refreshedAt: "2026-11-06T10:00:00.000Z",
+      filters: filtersFor("gainers"),
+      rows: [r("US.OLD", 8)],
+    }, "main/scanner-a"));
+    s.apply(rank("snapshot", "rth", {
+      refreshedAt: "2026-11-06T14:00:00.000Z",
+      filters: filtersFor("gainers"),
+      rows: [r("US.CURRENT", 3)],
+    }, "main/scanner-a"));
+    expect(s.momentumCandidates().map((item) => item.symbol)).toEqual(["US.CURRENT"]);
+    expect(s.momentumCandidates()[0].session).toBe("rth");
+  });
+
+  it("keeps delayed boards visible when they still contain candidates", () => {
+    const s = new ScannerStore();
+    s.apply(rank("snapshot", "rth", {
+      status: "delayed",
+      refreshedAt: "2026-11-06T14:00:00.000Z",
+      filters: filtersFor("gainers"),
+      rows: [r("US.DELAYED", 4)],
+    }, "main/scanner-a"));
+    expect(s.momentumCandidates().map((item) => item.symbol)).toEqual(["US.DELAYED"]);
   });
 });
