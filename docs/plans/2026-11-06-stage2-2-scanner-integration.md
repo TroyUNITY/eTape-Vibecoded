@@ -60,3 +60,12 @@ No provider key, paid subscription, licensing agreement, or provider adapter has
 - Scanner aggregation tests cover source merging, symbol deduplication, newest-row selection, Losers exclusion, freshest-session selection, and delayed-board handling.
 - Ross Candidates panel tests assert that Moomoo-only float evidence and absent chart history remain pending.
 - Full UI lint, test, and build validation must pass in CI before this stage is considered complete.
+
+
+## First-run operator checklist
+
+1. Create or enable Scanner panels in Gainers, Most Active, and Session Volume modes.
+2. Add the Ross Candidates panel. Confirm repeated symbols appear once and show all their discovery-source labels.
+3. Open a candidate's chart to populate the existing chart stores. The panel should update the candle-availability checks; it must not assume another candidate's data applies.
+4. Confirm Moomoo-only share figures remain `PENDING` for the free-float check, even when the share count is below 100 million.
+5. Confirm no action in this panel sends an order or changes Scanner filters/subscriptions.
