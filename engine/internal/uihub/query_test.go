@@ -10,6 +10,7 @@ import (
 
 	"github.com/earlisreal/eTape/engine/internal/clock"
 	"github.com/earlisreal/eTape/engine/internal/exec"
+	"github.com/earlisreal/eTape/engine/internal/feed"
 	"github.com/earlisreal/eTape/engine/internal/uihub/wsmsg"
 )
 
@@ -42,6 +43,100 @@ func (s *spyFills) QueryFills(symbol string, _, _ int64) ([]exec.FillRow, error)
 func (s *spyFills) ExportFills(_ context.Context, venue string, fromMs, toMs int64) ([]exec.ExportFillRow, error) {
 	s.exportVenue, s.exportFromMs, s.exportToMs = venue, fromMs, toMs
 	return s.exportRowsMulti, s.exportErr
+}
+
+
+type spyCandidateHistory struct {
+	*spyFills
+	oneMinute []feed.Bar
+	daily     []feed.Bar
+	oneErr    error
+	dailyErr  error
+	symbol    string
+	oneLimit  int
+	dayLimit  int
+}
+
+func (s *spyCandidateHistory) ReadRecentBars1m(symbol string, limit int) ([]feed.Bar, error) {
+	s.symbol, s.oneLimit = symbol, limit
+	return s.oneMinute, s.oneErr
+}
+
+func (s *spyCandidateHistory) ReadRecentDailyBars(symbol string, limit int) ([]feed.Bar, error) {
+	s.symbol, s.dayLimit = symbol, limit
+	return s.daily, s.dailyErr
+}
+
+func TestQueryCandidateHistoryReadsBoundedLocalArchive(t *testing.T) {
+	now := time.Date(2026, 11, 6, 15, 0, 0, 0, time.UTC)
+	archive := &spyCandidateHistory{
+		spyFills: &spyFills{},
+		oneMinute: []feed.Bar{{BucketMs: 1000, O: 1, H: 2, L: 0.5, C: 1.5, Volume: 1200}},
+		daily: []feed.Bar{{BucketMs: 2000, O: 2, H: 3, L: 1, C: 2.5, Volume: 25000}},
+	}
+	q := newQueries(archive, clock.NewFake(now))
+	out := q.handleContext(context.Background(), "QueryCandidateHistory", json.RawMessage(`{"symbol":" us.test "}`))
+	result, ok := out.(candidateHistoryResult)
+	if !ok {
+		t.Fatalf("expected candidateHistoryResult, got %T", out)
+	}
+	if result.Symbol != "US.TEST" || result.AsOfMs != now.UnixMilli() {
+		t.Fatalf("query metadata = %+v", result)
+	}
+	if archive.symbol != "US.TEST" || archive.oneLimit != candidateHistoryOneMinuteLimit || archive.dayLimit != candidateHistoryDailyLimit {
+		t.Fatalf("archive read was not normalized/bounded: %+v", archive)
+	}
+	if len(result.OneMinuteBars) != 1 || result.OneMinuteBars[0].Timeframe != "1m" ||
+		result.OneMinuteBars[0].C != 1.5 || result.OneMinuteBars[0].InProgress {
+		t.Fatalf("one-minute archive mapping = %+v", result.OneMinuteBars)
+	}
+	if len(result.DailyBars) != 1 || result.DailyBars[0].Timeframe != "D" ||
+		result.DailyBars[0].C != 2.5 || result.DailyBars[0].InProgress {
+		t.Fatalf("daily archive mapping = %+v", result.DailyBars)
+	}
+	if result.Error != "" {
+		t.Fatalf("unexpected query error: %s", result.Error)
+	}
+}
+
+func TestQueryCandidateHistoryReturnsPartialArchiveErrors(t *testing.T) {
+	archive := &spyCandidateHistory{
+		spyFills: &spyFills{},
+		oneMinute: []feed.Bar{{BucketMs: 1000, C: 1}},
+		dailyErr: errors.New("daily database unavailable"),
+	}
+	q := newQueries(archive, clock.NewFake(time.Now()))
+	out := q.handle("QueryCandidateHistory", json.RawMessage(`{"symbol":"US.TEST"}`))
+	result := out.(candidateHistoryResult)
+	if len(result.OneMinuteBars) != 1 || len(result.DailyBars) != 0 ||
+		!strings.Contains(result.Error, "daily database unavailable") {
+		t.Fatalf("partial archive result = %+v", result)
+	}
+}
+
+func TestQueryCandidateHistoryFailsClosedWithoutArchiveReader(t *testing.T) {
+	q := newQueries(&spyFills{}, clock.NewFake(time.Now()))
+	out := q.handle("QueryCandidateHistory", json.RawMessage(`{"symbol":"US.TEST"}`))
+	result := out.(candidateHistoryResult)
+	if result.Error == "" || len(result.OneMinuteBars) != 0 || len(result.DailyBars) != 0 {
+		t.Fatalf("archive reader absence must be explicit: %+v", result)
+	}
+}
+
+func TestQueryCandidateHistoryRejectsInvalidSymbol(t *testing.T) {
+	archive := &spyCandidateHistory{spyFills: &spyFills{}}
+	q := newQueries(archive, clock.NewFake(time.Now()))
+	out := q.handle("QueryCandidateHistory", json.RawMessage(`{"symbol":"US. TEST"}`))
+	result := out.(candidateHistoryResult)
+	if result.Error == "" || archive.symbol != "" {
+		t.Fatalf("invalid symbol reached archive reader: %+v", result)
+	}
+}
+
+func TestQueryCandidateHistoryIsAsync(t *testing.T) {
+	if !isAsyncQuery("QueryCandidateHistory") {
+		t.Fatal("candidate history must run off the WebSocket reader")
+	}
 }
 
 func TestQueryFillsReturnsFills(t *testing.T) {
