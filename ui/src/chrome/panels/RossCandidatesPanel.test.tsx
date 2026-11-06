@@ -270,6 +270,25 @@ describe("RossCandidatesPanel", () => {
       expect(screen.getByRole("button", { name: "Stop live monitor" })).toBeTruthy();
     });
 
+    act(() => stores.bars.apply({
+      kind: "delta",
+      topic: "md.bars",
+      key: "US.LIVE/1m",
+      payload: {
+        symbol: "US.LIVE",
+        timeframe: "1m",
+        bucketStart: new Date(Date.now() - 30_000).toISOString(),
+        o: 6,
+        h: 6.1,
+        l: 5.9,
+        c: 6,
+        v: 2500,
+        inProgress: true,
+      },
+    } as never));
+
+    await waitFor(() => expect(screen.getByText("LIVE 1M FRESH")).toBeTruthy());
+
     const monitorPatch = onConfigChange.mock.calls
       .map((call) => call[0] as Record<string, unknown>)
       .find((patch) => Array.isArray(patch.rossLiveMonitorSymbols));
