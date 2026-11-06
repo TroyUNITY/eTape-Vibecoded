@@ -57,6 +57,8 @@ import type { QueryChartWindowResult, QueryFilteredChartWindowResult, QueryVolum
 import { uiLog } from "../../logging/logger";
 
 const ALL_CHART_BARS = 1_000_000;
+// The experimental trade-derived candle source is paused in shipped builds.
+const FILTERED_CHARTS_ENABLED = false;
 
 type PendingIndicatorHydration = {
   instanceId: string;
@@ -233,7 +235,9 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
   // Config surfaces (timeframe + indicators) ARE low-rate chrome, so React state is
   // fine here (the hard rule is about market data, not per-chart config).
   const [timeframe, setTf] = useState(timeframe0);
-  const initialDataSource = config.settings.chartDataSource === "filtered" && (timeframe0 === "1m" || timeframe0 === "5m") ? "filtered" : "moomoo";
+  // Ignore legacy saved filtered-source settings while the experimental source is paused.
+  const initialDataSource = FILTERED_CHARTS_ENABLED && config.settings.chartDataSource === "filtered"
+    && (timeframe0 === "1m" || timeframe0 === "5m") ? "filtered" : "moomoo";
   const [chartDataSource, setChartDataSource] = useState<"moomoo" | "filtered">(initialDataSource);
   const [filteredDataStatus, setFilteredDataStatus] = useState("");
   const chartDataSourceRef = useRef<"moomoo" | "filtered">(initialDataSource);
@@ -1336,6 +1340,7 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
   };
 
   const changeChartDataSource = (source: "moomoo" | "filtered") => {
+    if (!FILTERED_CHARTS_ENABLED && source !== "moomoo") return;
     if (source === "filtered" && timeframe !== "1m" && timeframe !== "5m") return;
     if (source === chartDataSourceRef.current) return;
     chartDataSourceRef.current = source;
@@ -1576,7 +1581,7 @@ export function ChartPanel({ config, stores, scheduler, width, height, linkGroup
   // provider is mounted but its DOM node hasn't attached yet — render nothing for
   // that one tick rather than flash the controls inline first.
   const headerControls = <ChartHeaderControls palette={appPalette} timeframe={timeframe}
-    dataSource={chartDataSource} onDataSource={changeChartDataSource} dataStatus={filteredDataStatus}
+    dataSourceEnabled={FILTERED_CHARTS_ENABLED} dataSource={chartDataSource} onDataSource={changeChartDataSource} dataStatus={filteredDataStatus}
     onTimeframe={changeTimeframe} onAddIndicator={addIndicator}
     volumeAvailable={!instances.some((inst) => inst.type === "VOLUME")}
     profileAvailable={chartDataSource !== "filtered" && !instances.some((inst) => inst.type === "VOLUME_PROFILE")}

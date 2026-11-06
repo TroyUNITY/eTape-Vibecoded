@@ -1,13 +1,17 @@
-import { useMemo, useRef, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PanelProps } from "./registry";
 import { useTheme } from "../ThemeProvider";
 import type { Palette } from "../../render/palette";
 import { TradeGuardTracker, type GuardCheck, type GuardStatus } from "../../strategy/tradeGuard";
 
+const ANALYSIS_COALESCE_MS = 2_000;
+const MAX_ANALYSIS_1M_BARS = 12_000;
+const MAX_ANALYSIS_DAILY_BARS = 260;
+
 function statusColor(status: GuardStatus, palette: Palette): string {
   if (status === "WATCH" || status === "TRIGGERED" || status === "2R_HIT") return palette.ok;
   if (status === "BLOCKED" || status === "FILTERED" || status === "STOPPED") return palette.danger;
-  if (status === "DATA_UNCERTAIN") return palette.accent;
+  if (status === "DATA_UNCERTAIN" || status === "DATA_INCOMPLETE") return palette.accent;
   return palette.textMuted;
 }
 function money(value: number | null): string {
@@ -17,6 +21,85 @@ function money(value: number | null): string {
 function numberText(value: number | null, suffix = "", digits = 2): string {
   return value === null ? "—" : value.toFixed(digits) + suffix;
 }
+function catalystFor(stores: PanelProps["stores"], symbol: string) {
+  return stores.news.itemsFor(symbol).find((item) => item.catalyst_score >= 50 && item.catalyst_category !== "other");
+}
+function catalystKey(stores: PanelProps["stores"], symbol: string): string {
+  const item = catalystFor(stores, symbol);
+  return item ? [item.id, item.headline, item.published_at, item.catalyst_score].join("|") : "";
+}
+
+// Coalesce bursts of selected-symbol data updates. Global store notifications
+// are filtered by comparing the selected symbol's revision/object reference.
+// A continuous stream can trigger at most one full strategy evaluation every
+// two seconds; unrelated-symbol ticks do not schedule any Trade Guard work.
+function useTradeGuardRevision(stores: PanelProps["stores"], symbol: string): number {
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    if (!symbol) return;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let lastOneMinuteRev = stores.bars.getRev(symbol, "1m");
+    let lastDailyRev = stores.bars.getRev(symbol, "D");
+    let lastQuote = stores.quote.get(symbol);
+    let lastDetail = stores.stockDetail.detailFor(symbol);
+    let lastScannerRow = stores.scanner.rowForSymbol(symbol);
+    let lastCatalyst = catalystKey(stores, symbol);
+
+    const schedule = () => {
+      if (timer !== null) return;
+      timer = setTimeout(() => {
+        timer = null;
+        setRevision((value) => value + 1);
+      }, ANALYSIS_COALESCE_MS);
+    };
+    const onBars = () => {
+      const oneMinuteRev = stores.bars.getRev(symbol, "1m");
+      const dailyRev = stores.bars.getRev(symbol, "D");
+      if (oneMinuteRev !== lastOneMinuteRev || dailyRev !== lastDailyRev) {
+        lastOneMinuteRev = oneMinuteRev;
+        lastDailyRev = dailyRev;
+        schedule();
+      }
+    };
+    const onQuote = () => {
+      const quote = stores.quote.get(symbol);
+      if (quote !== lastQuote) { lastQuote = quote; schedule(); }
+    };
+    const onDetail = () => {
+      const detail = stores.stockDetail.detailFor(symbol);
+      if (detail !== lastDetail) { lastDetail = detail; schedule(); }
+    };
+    const onScanner = () => {
+      const row = stores.scanner.rowForSymbol(symbol);
+      if (row !== lastScannerRow) { lastScannerRow = row; schedule(); }
+    };
+    const onNews = () => {
+      const key = catalystKey(stores, symbol);
+      if (key !== lastCatalyst) { lastCatalyst = key; schedule(); }
+    };
+
+    const offBars = stores.bars.subscribe(onBars);
+    const offQuotes = stores.quote.subscribe(onQuote);
+    const offDetails = stores.stockDetail.subscribe(onDetail);
+    const offScanner = stores.scanner.subscribe(onScanner);
+    const offNews = stores.news.subscribe(onNews);
+
+    // Refresh immediately on mount or symbol switch; subsequent bursts are throttled.
+    setRevision((value) => value + 1);
+
+    return () => {
+      offBars();
+      offQuotes();
+      offDetails();
+      offScanner();
+      offNews();
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, [stores, symbol]);
+  return revision;
+}
+
 function CheckRow({ item, palette }: { item: GuardCheck; palette: Palette }): JSX.Element {
   const color = item.state === "pass" ? palette.ok
     : item.state === "fail" ? palette.danger
@@ -40,54 +123,24 @@ export function TradeGuardPanel({ config, stores, linkGroups, group: groupProp, 
     (typeof config.settings.symbol === "string" ? config.settings.symbol : "");
 
   const trackerRef = useRef(new TradeGuardTracker());
-  const barsRev = useSyncExternalStore(
-    (cb) => stores.bars.subscribe(cb),
-    () => stores.bars.getRev(symbol, "1m"),
-  );
-  const dailyRev = useSyncExternalStore(
-    (cb) => stores.bars.subscribe(cb),
-    () => stores.bars.getRev(symbol, "D"),
-  );
-  const detailSnapshot = useSyncExternalStore(
-    (cb) => stores.stockDetail.subscribe(cb),
-    () => stores.stockDetail.getSnapshot(),
-  );
-  const quoteRev = useSyncExternalStore(
-    (cb) => stores.quote.subscribe(cb),
-    () => stores.quote.getRev(),
-  );
-  const scannerSnapshot = useSyncExternalStore(
-    (cb) => stores.scanner.subscribe(cb),
-    () => stores.scanner.getSnapshot(),
-  );
-  const newsSnapshot = useSyncExternalStore(
-    (cb) => stores.news.subscribe(cb),
-    () => stores.news.getSnapshot(),
-  );
+  const refreshRevision = useTradeGuardRevision(stores, symbol);
 
   const result = useMemo(() => {
     if (!symbol) return null;
-    const scannerRows = Object.values(scannerSnapshot.sessions)
-      .flatMap((view) => view.rows
-        .filter((row) => row.symbol === symbol)
-        .map((row) => ({ row, refreshedAt: view.refreshedAt })))
-      .sort((a, b) => Date.parse(b.refreshedAt ?? "") - Date.parse(a.refreshedAt ?? ""));
     const detail = stores.stockDetail.detailFor(symbol);
-    const scannerRow = scannerRows[0]?.row;
+    const scannerRow = stores.scanner.rowForSymbol(symbol);
     const lastPrice = stores.quote.get(symbol)?.last;
     return trackerRef.current.evaluate({
-      bars: stores.bars.allSeries(symbol, "1m"),
-      dailyBars: stores.bars.allSeries(symbol, "D"),
+      bars: stores.bars.tailSeries(symbol, "1m", MAX_ANALYSIS_1M_BARS),
+      dailyBars: stores.bars.tailSeries(symbol, "D", MAX_ANALYSIS_DAILY_BARS),
       ...(detail ? { detail } : {}),
       ...(scannerRow ? { scannerRow } : {}),
       ...(lastPrice !== undefined ? { lastPrice } : {}),
     });
-  }, [symbol, barsRev, dailyRev, detailSnapshot, quoteRev, scannerSnapshot, stores]);
+  }, [symbol, refreshRevision, stores]);
 
-  const catalyst = useMemo(() => {
-    if (!symbol) return undefined;
-    return stores.news.itemsFor(symbol).find((item) => item.catalyst_score >= 50 && item.catalyst_category !== "other");
-  }, [newsSnapshot, symbol, stores]);
+  const catalyst = useMemo(() => symbol ? catalystFor(stores, symbol) : undefined,
+    [symbol, refreshRevision, stores]);
 
   if (!symbol) {
     return (
@@ -181,7 +234,7 @@ export function TradeGuardPanel({ config, stores, linkGroups, group: groupProp, 
           ? "Catalyst context: " + catalyst.headline
           : "No high-scoring catalyst headline is available. Quantin's Pine script does not use news as a hard gate."}
         <br />
-        Same-time RVOL requires 10 prior sessions in the stored one-minute history. Scanner daily RVOL is shown separately and is not substituted.
+        Trade Guard coalesces selected-symbol updates and recalculates at most once every two seconds during active updates. Analysis uses a bounded 12,000-bar one-minute history.
         <br />
         A trigger, stop or 2R event is calculated from chart prices only. Trade Guard never sends orders or represents broker fills.
       </div>

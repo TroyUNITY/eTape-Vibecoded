@@ -7,7 +7,7 @@ import { LIGHT } from "../../../render/palette";
 
 afterEach(cleanup);
 const base = {
-  palette: LIGHT, timeframe: "1m", dataSource: "moomoo" as const, onDataSource: vi.fn(),
+  palette: LIGHT, timeframe: "1m", dataSourceEnabled: true, dataSource: "moomoo" as const, onDataSource: vi.fn(),
   onTimeframe: vi.fn(), onAddIndicator: vi.fn(), onScreenshot: vi.fn(), onOpenSettings: vi.fn(),
   crosshairSyncEnabled: false, onToggleCrosshairSync: vi.fn(),
   drawingToolsVisible: true, onToggleDrawingTools: vi.fn(),
@@ -22,6 +22,12 @@ const cssColor = (hex: string): string => {
 };
 
 describe("ChartHeaderControls", () => {
+  it("hides the experimental source selector unless explicitly enabled", () => {
+    render(<ChartHeaderControls {...base} dataSourceEnabled={false} />);
+    expect(screen.queryByRole("button", { name: "Filtered chart data" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Moomoo chart data" })).toBeNull();
+  });
+
   it("renders all 9 timeframe buttons and marks the active one", () => {
     render(<ChartHeaderControls {...base} />);
     for (const tf of TIMEFRAMES) expect(screen.getByRole("button", { name: `timeframe ${tf}` })).toBeTruthy();

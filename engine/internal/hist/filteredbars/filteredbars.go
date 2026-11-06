@@ -353,10 +353,6 @@ func buildMinute(bucket int64, input minuteInput, anchorPrice float64, anchorMs 
 			}
 		}
 		if r.size <= 0 || !finitePositive(r.price) {
-			if r.volumeEligible {
-				// A malformed price/size report cannot safely be admitted to either
-				// price or volume totals.
-			}
 			if input.source == SourceTickStore {
 				diagnostics.LocalInvalidReports++
 			}

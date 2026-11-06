@@ -75,6 +75,8 @@ describe("evaluateTradeGuard", () => {
     expect(result.status).toBe("NO_DATA");
     expect(result.setup).toBe("NONE");
     expect(result.entry).toBeNull();
+    expect(result.dataUncertain).toBe(false);
+    expect(result.dataIncomplete).toBe(true);
   });
 
   it("keeps scanner daily RVOL separate from same-time-of-day RVOL", () => {
@@ -84,13 +86,47 @@ describe("evaluateTradeGuard", () => {
     const comparableBars = priorWeekdays(currentDay, 10)
       .map((day) => makeBar(day + "T13:35:00Z", 500));
     const bars = [...warmupBars, ...comparableBars, makeBar(currentDay + "T13:35:00Z", 1_000)];
-    const result = evaluateTradeGuard({
-      bars,
-      scannerRow: scannerRow(),
-    });
+    const result = evaluateTradeGuard({ bars, scannerRow: scannerRow() });
     expect(result.metrics.relativeVolume).toBe(2);
     expect(result.metrics.scannerDailyRelativeVolume).toBe(12);
     expect(result.warnings.some((warning) => warning.includes("different calculation"))).toBe(true);
+  });
+
+  it("treats extreme same-time RVOL as a warning, not automatic data corruption", () => {
+    const currentDay = "2026-10-30";
+    const priorDays = priorWeekdays(currentDay, 10);
+    const warmup = priorWeekdays(currentDay, 20).slice(0, 10)
+      .map((day) => makeBar(day + "T13:00:00Z", 100));
+    const comparison = priorDays.map((day) => makeBar(day + "T13:35:00Z", 500));
+    const bars = [...warmup, ...comparison, makeBar(currentDay + "T13:35:00Z", 1_000_000)];
+    const result = evaluateTradeGuard({ bars, scannerRow: scannerRow() });
+    expect(result.metrics.relativeVolume).toBeGreaterThan(500);
+    expect(result.dataUncertain).toBe(false);
+    expect(result.dataIncomplete).toBe(false);
+    expect(result.status).not.toBe("DATA_UNCERTAIN");
+    expect(result.warnings.some((warning) => warning.includes("exceptionally high"))).toBe(true);
+  });
+
+  it("uses DATA_INCOMPLETE when critical eligibility inputs are missing", () => {
+    const bars = Array.from({ length: 25 }, (_, index) =>
+      makeBar("2026-10-30T13:" + String(index).padStart(2, "0") + ":00Z", 100));
+    const result = evaluateTradeGuard({ bars });
+    expect(result.status).toBe("DATA_INCOMPLETE");
+    expect(result.dataUncertain).toBe(false);
+    expect(result.dataIncomplete).toBe(true);
+  });
+
+  it("uses DATA_UNCERTAIN only for explicit recent OHLCV integrity problems", () => {
+    const bars = Array.from({ length: 25 }, (_, index) =>
+      makeBar("2026-10-30T13:" + String(index).padStart(2, "0") + ":00Z", 100));
+    bars[bars.length - 1] = {
+      ...bars[bars.length - 1],
+      h: 4.8,
+    };
+    const result = evaluateTradeGuard({ bars });
+    expect(result.status).toBe("DATA_UNCERTAIN");
+    expect(result.dataUncertain).toBe(true);
+    expect(result.reasons.some((reason) => reason.includes("internally inconsistent OHLC"))).toBe(true);
   });
 
   it("keeps empty-history tracking in a no-data state", () => {

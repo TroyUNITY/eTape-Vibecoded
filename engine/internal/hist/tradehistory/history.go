@@ -214,7 +214,7 @@ func canonicalSymbol(symbol string) (string, error) {
 		return "", errors.New("trade history: symbol is required")
 	}
 	for _, r := range symbol {
-		if !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '.' && r != '-' {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '.' && r != '-' {
 			return "", fmt.Errorf("trade history: invalid symbol %q", symbol)
 		}
 	}

@@ -90,7 +90,9 @@ describe("LadderPanel", () => {
   });
 
   it("persists the level setting as a patch from the header gear", () => {
-    const { onConfigChange } = renderLadder({ symbol: "US.AAPL", levels: 35 });
+    // No symbol is needed to test the dialog. Avoid mounting the canvas and its
+    // market-data subscriptions so this UI-only test stays fast in CI.
+    const { onConfigChange } = renderLadder({ levels: 35 });
     fireEvent.click(screen.getByLabelText("ladder settings"));
     fireEvent.change(screen.getByLabelText("depth levels"), { target: { value: "60" } });
     fireEvent.click(screen.getByRole("button", { name: "Ok" }));

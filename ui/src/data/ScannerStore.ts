@@ -101,6 +101,21 @@ export class ScannerStore extends ReactStore<ScannerState> {
     return this.getSnapshot().sessions[`${scannerId}/${session}`] ?? EMPTY_VIEW;
   }
 
+  // Fetches a symbol's row from the freshest session without allocating and
+  // sorting a temporary array across every session on each Trade Guard refresh.
+  rowForSymbol(symbol: string): ScannerRowView | undefined {
+    let best: ScannerRowView | undefined;
+    let bestTime = -Infinity;
+    for (const view of Object.values(this.getSnapshot().sessions)) {
+      const row = view.rows.find((item) => item.symbol === symbol);
+      if (!row) continue;
+      const parsed = view.refreshedAt ? Date.parse(view.refreshedAt) : -Infinity;
+      const time = Number.isFinite(parsed) ? parsed : -Infinity;
+      if (!best || time > bestTime) { best = row; bestTime = time; }
+    }
+    return best;
+  }
+
   // The session view with the freshest refreshedAt — the "live" board the
   // panels follow. Null session until any data arrives.
   currentView(scannerId = LEGACY_SCANNER): CurrentScannerView {
