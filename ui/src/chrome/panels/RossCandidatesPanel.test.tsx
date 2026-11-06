@@ -34,6 +34,20 @@ describe("RossCandidatesPanel", () => {
       group: null,
       settings: {},
     };
+    const sendQuery = vi.fn(async () => ({
+      symbol: "US.TEST",
+      asOfMs: Date.now(),
+      oneMinuteBars: [{
+        symbol: "US.TEST", timeframe: "1m",
+        bucketStart: new Date(Date.now() - 60_000).toISOString(),
+        o: 5, h: 5.1, l: 4.9, c: 5, v: 1000, inProgress: false,
+      }],
+      dailyBars: [{
+        symbol: "US.TEST", timeframe: "D",
+        bucketStart: "2026-11-05T00:00:00.000Z",
+        o: 4, h: 5.2, l: 3.9, c: 5, v: 100000, inProgress: false,
+      }],
+    }));
     const props = {
       config,
       stores,
@@ -43,24 +57,7 @@ describe("RossCandidatesPanel", () => {
       linkGroups: {} as never,
       commands: {
         sendCommand: async () => ({ status: "accepted" }),
-        sendQuery: vi.fn(async () => ({
-          symbol: "US.TEST",
-          asOfMs: Date.now(),
-          oneMinuteBars: [{
-            symbol: "US.TEST",
-            timeframe: "1m",
-            bucketStart: new Date(Date.now() - 60_000).toISOString(),
-            o: 5, h: 5.1, l: 4.9, c: 5, v: 1000,
-            inProgress: false,
-          }],
-          dailyBars: [{
-            symbol: "US.TEST",
-            timeframe: "D",
-            bucketStart: "2026-11-05T00:00:00.000Z",
-            o: 4, h: 5.2, l: 3.9, c: 5, v: 100000,
-            inProgress: false,
-          }],
-        })),
+        sendQuery,
       },
       onConfigChange: () => {},
     } as unknown as PanelProps;
@@ -101,6 +98,15 @@ describe("RossCandidatesPanel", () => {
     }, { timeout: 2_000 });
 
     expect(screen.getByText(/OutstandingShares remains an unverified proxy/)).toBeTruthy();
-    expect(screen.queryByText("ELIGIBLE")).toBeNull();
+
+    fireEvent.click(screen.getByText("US.TEST"));
+    const loadButton = screen.getByRole("button", { name: "Load archived bars" });
+    fireEvent.click(loadButton);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Refresh archived bars" })).toBeTruthy();
+      expect(screen.getByText("1m candles").nextElementSibling?.textContent).toBe("1");
+      expect(screen.getAllByText("PENDING").length).toBeGreaterThan(0);
+    });
+    expect(sendQuery).toHaveBeenCalledWith("QueryCandidateHistory", { symbol: "US.TEST" });
   });
 });
