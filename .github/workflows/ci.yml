@@ -69,6 +69,8 @@ jobs:
         run: go test -p 1 ./...
 
   ui:
+    permissions:
+      contents: write
     # Golden PNGs are generated on Windows. Cairo/Pango text rasterization is
     # OS-specific even with the same bundled TTF, so strict pixel comparison
     # must run on the baseline platform.
@@ -119,6 +121,25 @@ jobs:
         run: npm test
 
       # Build already runs typecheck (npm run typecheck && vite build).
+      - name: Commit refreshed tape goldens to the PR branch
+        if: github.head_ref == 'stage2-5-technical-analysis'
+        working-directory: ui
+        shell: pwsh
+        run: |
+          git fetch origin $env:GITHUB_HEAD_REF
+          git checkout -B $env:GITHUB_HEAD_REF FETCH_HEAD
+          $env:UPDATE_GOLDENS = "1"
+          npm run test:golden
+          git add test/golden/goldens/tapecolor-*.png
+          if (git diff --cached --quiet) {
+            Write-Host "Tape golden references are already current."
+          } else {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "test(ui): refresh tape goldens for brighter text"
+            git push origin "HEAD:$env:GITHUB_HEAD_REF"
+          }
+
       - name: Build
         working-directory: ui
         run: npm run build
