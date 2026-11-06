@@ -112,7 +112,7 @@ function assessResistance(
     .slice(-criteria.resistanceLookbackDays)
     .map(([, item]) => item.bar);
 
-  const minimumHistory = Math.max(10, criteria.resistancePivotDepth * 2 + 1);
+  const minimumHistory = Math.max(20, criteria.resistancePivotDepth * 2 + 1);
   if (completed.length < minimumHistory) {
     return unknownResistance(
       "Needs at least " + minimumHistory + " completed daily candles for resistance analysis; found " + completed.length + ".",
