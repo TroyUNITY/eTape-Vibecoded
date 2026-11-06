@@ -139,6 +139,24 @@ describe("evaluateRossMomentumCandidate", () => {
     expect(result.checks.find((item) => item.id === "same-time-rvol")?.state).toBe("unknown");
   });
 
+  it("keeps stale one-minute data pending even when same-time RVOL still passes", () => {
+    const currentDay = "2026-10-30";
+    const bars = minuteHistory(currentDay);
+    for (const day of priorWeekdays(currentDay, 10)) {
+      bars.push(makeBar(day, 0, "1m", {
+        bucketStart: new Date(day + "T13:45:00Z").toISOString(),
+      }));
+    }
+    const result = evaluateRossMomentumCandidate(eligibleInput({
+      oneMinuteBars: bars,
+      asOfMs: Date.parse(currentDay + "T13:45:00Z"),
+    }));
+    expect(result.metrics.sameTimeRelativeVolume).toBe(2);
+    expect(result.status).toBe("PENDING");
+    expect(result.metrics.latestOneMinuteBarAgeMs).toBe(10 * 60_000);
+    expect(result.checks.find((item) => item.id === "intraday-data-freshness")?.state).toBe("unknown");
+  });
+
   it("requires 200 completed daily candles for the 20/50/200 EMA trend check", () => {
     const result = evaluateRossMomentumCandidate(eligibleInput({
       dailyBars: dailyHistory("2026-10-30", 80),
