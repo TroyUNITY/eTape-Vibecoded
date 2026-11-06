@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PanelProps } from "./registry";
 import { useTheme } from "../ThemeProvider";
 import type { Palette } from "../../render/palette";
 import { evaluateRossMomentumCandidate, type CandidateEligibilityResult } from "../../strategy/candidateEligibility";
 import type { MomentumScannerCandidate } from "../../data/ScannerStore";
 import type { Bar, QueryCandidateHistoryResult } from "../../wire/contract";
+import { MAX_CANDIDATE_MONITOR_SYMBOLS } from "../../wire/DemandRegistry";
 
-const MAX_ANALYSIS_1M_BARS = 12_000;
+const MAX_ANALYSIS_1M_BARS = 15_000;
 const MAX_ANALYSIS_DAILY_BARS = 260;
 
 interface RetainedCandidateRecord {
@@ -24,6 +25,7 @@ interface EvaluatedCandidate {
 }
 
 const RETAINED_CANDIDATES_SETTING = "rossRetainedCandidates";
+const LIVE_MONITOR_SYMBOLS_SETTING = "rossLiveMonitorSymbols";
 const MAX_RETAINED_CANDIDATES = 30;
 const MOMENTUM_MODES = ["gainers", "most_active", "session_volume"] as const;
 const SCANNER_SESSIONS = ["premarket", "rth", "afterhours", "overnight"] as const;
@@ -73,6 +75,30 @@ function readRetainedCandidates(value: unknown): RetainedCandidateRecord[] {
     .slice(0, MAX_RETAINED_CANDIDATES);
 }
 
+function readLiveMonitorSymbols(value: unknown, retained: readonly RetainedCandidateRecord[]): string[] {
+  if (!Array.isArray(value)) return [];
+  const retainedSymbols = new Set(retained.map((item) => item.symbol));
+  const unique = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.length > 64 || !entry.startsWith("US.") ||
+      !retainedSymbols.has(entry) || unique.has(entry)) continue;
+    unique.add(entry);
+    if (unique.size >= MAX_CANDIDATE_MONITOR_SYMBOLS) break;
+  }
+  return [...unique];
+}
+
+function mergeOneMinuteBars(archived: readonly Bar[], live: readonly Bar[], limit: number): Bar[] {
+  const byBucket = new Map<string, Bar>();
+  for (const bar of archived) byBucket.set(bar.bucketStart, bar);
+  // Live BarStore values win over the historical archive when the same
+  // minute is updated/finalized after monitoring is enabled.
+  for (const bar of live) byBucket.set(bar.bucketStart, bar);
+  return [...byBucket.values()]
+    .sort((a, b) => a.bucketStart.localeCompare(b.bucketStart))
+    .slice(-limit);
+}
+
 interface CandidateHistoryData {
   oneMinuteBars: Bar[];
   dailyBars: Bar[];
@@ -119,7 +145,7 @@ function chartDailyCount(stores: PanelProps["stores"], symbol: string): string {
   return stores.bars.latestBar(symbol, "D") ? "chart loaded" : "not loaded";
 }
 
-export function RossCandidatesPanel({ config, stores, commands, onConfigChange }: PanelProps): JSX.Element {
+export function RossCandidatesPanel({ config, stores, commands, onConfigChange, demandRegistry }: PanelProps): JSX.Element {
   const { palette } = useTheme();
   const [revision, setRevision] = useState(1);
   const [historyBySymbol, setHistoryBySymbol] = useState<Record<string, CandidateHistoryData>>({});
@@ -127,6 +153,12 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
   const [retainedCandidates, setRetainedCandidates] = useState<RetainedCandidateRecord[]>(
     () => readRetainedCandidates(config.settings[RETAINED_CANDIDATES_SETTING]),
   );
+  const [liveMonitorSymbols, setLiveMonitorSymbols] = useState<string[]>(
+    () => readLiveMonitorSymbols(config.settings[LIVE_MONITOR_SYMBOLS_SETTING],
+      readRetainedCandidates(config.settings[RETAINED_CANDIDATES_SETTING])),
+  );
+  const [monitorErrors, setMonitorErrors] = useState<Record<string, string>>({});
+  const activeMonitorDemandIds = useRef(new Set<string>());
 
   const saveRetainedCandidates = useCallback((next: RetainedCandidateRecord[]) => {
     setRetainedCandidates(next);
