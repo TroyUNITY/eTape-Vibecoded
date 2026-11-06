@@ -179,6 +179,7 @@ export class ScannerStore extends ReactStore<ScannerState> {
     }
 
     const bySymbol = new Map<string, MomentumScannerCandidate>();
+    const modeOrder: MomentumScannerMode[] = ["gainers", "most_active", "session_volume"];
     const selected = [...latestByScanner.values()].sort((a, b) => a.scannerId.localeCompare(b.scannerId));
     for (const board of selected) {
       for (const row of board.view.rows) {
@@ -194,9 +195,8 @@ export class ScannerStore extends ReactStore<ScannerState> {
           continue;
         }
 
-        const sourceModes = existing.sourceModes.includes(board.mode)
-          ? existing.sourceModes
-          : [...existing.sourceModes, board.mode];
+        const sourceModes = [...new Set([...existing.sourceModes, board.mode])]
+          .sort((a, b) => modeOrder.indexOf(a) - modeOrder.indexOf(b));
         const scannerIds = existing.scannerIds.includes(board.scannerId)
           ? existing.scannerIds
           : [...existing.scannerIds, board.scannerId];
