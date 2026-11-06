@@ -1,6 +1,6 @@
 import type { FC } from "react";
 import type { AckMsg, TopicName } from "../../wire/contract";
-import type { DemandProfile } from "../../wire/DemandRegistry";
+import type { DemandProfile, DemandRegistry } from "../../wire/DemandRegistry";
 import type { PanelConfig } from "../workspace";
 import type { Stores } from "../../data/registry";
 import type { Scheduler } from "../../render/Scheduler";
@@ -31,6 +31,9 @@ export interface PanelProps {
   height: number;
   linkGroups: LinkGroups;
   commands: { sendCommand(name: string, args: unknown): Promise<AckMsg>; sendQuery(name: string, args: unknown): Promise<unknown>; isConnected?(): boolean };
+  // Available to panels with bounded multi-symbol monitoring needs. Optional
+  // so standalone panel tests and non-monitoring callers remain lightweight.
+  demandRegistry?: DemandRegistry;
   // Persist a PATCH of this panel's settings (send only the keys being changed —
   // e.g. { timeframe } or { indicators }). AppShell merges the patch into the
   // workspace doc's matching panel entry and debounce-saves via WorkspaceStore.
