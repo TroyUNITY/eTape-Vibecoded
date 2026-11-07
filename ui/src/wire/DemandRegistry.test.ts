@@ -187,38 +187,38 @@ describe("DemandRegistry", () => {
     ]);
   });
 
-  it("caps candidate monitoring at five unique symbols and releases capacity", async () => {
+  it("caps strategy monitoring at five unique symbols and releases capacity", async () => {
     const f = fakeClient();
     const reg = new DemandRegistry(f.client);
 
     for (let i = 0; i < 5; i++) {
-      const ack = await reg.ensure(`candidate-${i}`, `US.STK${i}`, "candidate");
+      const ack = await reg.ensure(`strategy-${i}`, `US.STK${i}`, "strategy");
       expect(ack.status).toBe("accepted");
     }
 
     // Two panel instances can share a single symbol without consuming another
     // unique-symbol slot.
-    const duplicate = await reg.ensure("candidate-duplicate", "US.STK0", "candidate");
+    const duplicate = await reg.ensure("strategy-duplicate", "US.STK0", "strategy");
     expect(duplicate.status).toBe("accepted");
 
-    const blocked = await reg.ensure("candidate-overflow", "US.STK5", "candidate");
+    const blocked = await reg.ensure("strategy-overflow", "US.STK5", "strategy");
     expect(blocked.status).toBe("blocked");
     expect(blocked.reason).toContain("5 unique symbols");
 
-    reg.release("candidate-0");
-    reg.release("candidate-duplicate");
-    const replacement = await reg.ensure("candidate-replacement", "US.STK5", "candidate");
+    reg.release("strategy-0");
+    reg.release("strategy-duplicate");
+    const replacement = await reg.ensure("strategy-replacement", "US.STK5", "strategy");
     expect(replacement.status).toBe("accepted");
   });
 
-  it("reserves candidate monitor capacity while EnsureSymbol acknowledgements are pending", async () => {
+  it("reserves strategy monitor capacity while EnsureSymbol acknowledgements are pending", async () => {
     const f = controlledClient();
     const reg = new DemandRegistry(f.client);
     const pending = Array.from({ length: 5 }, (_, i) =>
-      reg.ensure(`pending-${i}`, `US.PENDING${i}`, "candidate"));
+      reg.ensure(`pending-${i}`, `US.PENDING${i}`, "strategy"));
 
     expect(f.sent).toHaveLength(5);
-    const blocked = await reg.ensure("pending-overflow", "US.OVERFLOW", "candidate");
+    const blocked = await reg.ensure("pending-overflow", "US.OVERFLOW", "strategy");
     expect(blocked.status).toBe("blocked");
     expect(f.sent).toHaveLength(5);
 
