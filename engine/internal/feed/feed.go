@@ -249,6 +249,21 @@ func ChartDemand(id, symbol string) Demand {
 		WantsHistory: true, CachedDaily: true}
 }
 
+// MomentumCandidateDemand requests live prints plus one-minute K-lines for a
+// user-selected momentum candidate. It is an ordinary, non-focused demand so
+// it can compete for live quota while selected, but it does not pin the symbol
+// under quota pressure. The seed runs on the background lane so a shortlist
+// update cannot delay interactive chart preparation.
+func MomentumCandidateDemand(id, symbol string) Demand {
+	return Demand{
+		ID:             id,
+		Symbol:         symbol,
+		Subs:           []SubType{SubTicker, SubKL1m},
+		WantsHistory:   true,
+		BackgroundSeed: true,
+	}
+}
+
 // Resolution selects a history series.
 type Resolution uint8
 

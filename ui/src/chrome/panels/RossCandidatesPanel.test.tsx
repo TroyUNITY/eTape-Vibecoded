@@ -197,4 +197,104 @@ describe("RossCandidatesPanel", () => {
     fireEvent.click(screen.getByText("US.RETAINED"));
     expect(screen.getByText("NOT IN CURRENT SCANNERS")).toBeTruthy();
   });
+
+  it("requests bounded live one-minute monitoring for a retained candidate and releases it on unmount", async () => {
+    const stores = makeStores();
+    const config: PanelConfig = {
+      id: "p-ross-live",
+      panelId: "ross-candidates",
+      group: null,
+      settings: {},
+    };
+    const onConfigChange = vi.fn();
+    const demandRegistry = {
+      ensure: vi.fn(async () => ({ kind: "ack", corrId: "", status: "accepted" as const })),
+      release: vi.fn(),
+    };
+    const props = {
+      config,
+      stores,
+      scheduler: {} as never,
+      width: 500,
+      height: 300,
+      linkGroups: {} as never,
+      commands: {
+        sendCommand: async () => ({ status: "accepted" }),
+        sendQuery: async () => ({ symbol: "US.LIVE", oneMinuteBars: [], dailyBars: [] }),
+      },
+      onConfigChange,
+      demandRegistry,
+    } as unknown as PanelProps;
+
+    const view = render(<ThemeProvider><RossCandidatesPanel {...props} /></ThemeProvider>);
+    const payload: ScannerRankPayload = {
+      scannerId: "main/scanner-live",
+      session: "rth",
+      refreshedAt: "2026-11-06T14:20:00.000Z",
+      discoveryAt: "2026-11-06T14:20:00.000Z",
+      status: "ready",
+      filters,
+      rows: [{
+        symbol: "US.LIVE",
+        shortSellRestricted: false,
+        changePct: 9,
+        last: 6,
+        floatShares: 7_000_000,
+        volume: 700_000,
+        sessionVolume: 350_000,
+        turnover: null,
+        relativeVolume: 3,
+        shortInterest: null,
+        shortInterestAsOf: null,
+      }],
+    };
+    act(() => stores.scanner.apply({
+      kind: "snapshot",
+      topic: "scanner.rank",
+      key: "main/scanner-live/rth",
+      payload,
+    }));
+
+    await waitFor(() => expect(screen.getByText("US.LIVE")).toBeTruthy());
+    fireEvent.click(screen.getByText("US.LIVE"));
+    fireEvent.click(screen.getByRole("button", { name: "Keep on shortlist" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Monitor live (1m)" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Monitor live (1m)" }));
+    await waitFor(() => {
+      expect(demandRegistry.ensure).toHaveBeenCalledWith(
+        "ross-candidate:p-ross-live:US.LIVE",
+        "US.LIVE",
+        "candidate",
+      );
+      expect(screen.getByRole("button", { name: "Stop live monitor" })).toBeTruthy();
+    });
+
+    act(() => stores.bars.apply({
+      kind: "delta",
+      topic: "md.bars",
+      key: "US.LIVE/1m",
+      payload: {
+        symbol: "US.LIVE",
+        timeframe: "1m",
+        bucketStart: new Date(Date.now() - 30_000).toISOString(),
+        o: 6,
+        h: 6.1,
+        l: 5.9,
+        c: 6,
+        v: 2500,
+        inProgress: true,
+      },
+    } as never));
+
+    await waitFor(() => expect(screen.getByText("LIVE 1M FRESH")).toBeTruthy());
+
+    const monitorPatch = onConfigChange.mock.calls
+      .map((call) => call[0] as Record<string, unknown>)
+      .find((patch) => Array.isArray(patch.rossLiveMonitorSymbols));
+    expect(monitorPatch?.rossLiveMonitorSymbols).toEqual(["US.LIVE"]);
+
+    view.unmount();
+    expect(demandRegistry.release).toHaveBeenCalledWith("ross-candidate:p-ross-live:US.LIVE");
+  });
 });

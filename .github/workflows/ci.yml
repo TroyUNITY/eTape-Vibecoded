@@ -95,7 +95,7 @@ jobs:
         run: npm run lint
 
       - name: Refresh golden screenshots for intentional text update
-        if: github.head_ref == 'stage3-candidate-retention'
+        if: github.head_ref == 'stage2-4-bounded-live-monitoring' || github.head_ref == 'stage3-candidate-retention'
         working-directory: ui
         shell: pwsh
         run: |
@@ -103,7 +103,7 @@ jobs:
           npm run test:golden
 
       - name: Upload refreshed golden screenshots for review
-        if: github.head_ref == 'stage3-candidate-retention'
+        if: github.head_ref == 'stage2-4-bounded-live-monitoring' || github.head_ref == 'stage3-candidate-retention'
         uses: actions/upload-artifact@v4
         with:
           name: updated-ui-goldens
@@ -114,13 +114,8 @@ jobs:
         working-directory: ui
         run: npm test
 
-      # Build already runs typecheck (npm run typecheck && vite build).
-      - name: Build
-        working-directory: ui
-        run: npm run build
-
       - name: Commit refreshed tape goldens to the PR branch
-        if: github.head_ref == 'stage3-candidate-retention'
+        if: github.head_ref == 'stage2-4-bounded-live-monitoring' || github.head_ref == 'stage3-candidate-retention'
         working-directory: ui
         shell: pwsh
         run: |
@@ -137,3 +132,8 @@ jobs:
             git commit -m "test(ui): refresh tape goldens for brighter text"
             git push origin "HEAD:$env:GITHUB_HEAD_REF"
           }
+
+      # Build already runs typecheck (npm run typecheck && vite build).
+      - name: Build
+        working-directory: ui
+        run: npm run build

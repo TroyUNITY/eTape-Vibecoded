@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PanelProps } from "./registry";
 import { useTheme } from "../ThemeProvider";
 import type { Palette } from "../../render/palette";
 import { evaluateRossMomentumCandidate, type CandidateEligibilityResult } from "../../strategy/candidateEligibility";
 import type { MomentumScannerCandidate } from "../../data/ScannerStore";
 import type { Bar, QueryCandidateHistoryResult } from "../../wire/contract";
+import { MAX_CANDIDATE_MONITOR_SYMBOLS } from "../../wire/DemandRegistry";
 
-const MAX_ANALYSIS_1M_BARS = 12_000;
+const MAX_ANALYSIS_1M_BARS = 15_000;
 const MAX_ANALYSIS_DAILY_BARS = 260;
 
 interface RetainedCandidateRecord {
@@ -21,9 +22,11 @@ interface EvaluatedCandidate {
   result: CandidateEligibilityResult;
   retained: RetainedCandidateRecord | null;
   currentlyDiscovered: boolean;
+  liveMonitoringRequested: boolean;
 }
 
 const RETAINED_CANDIDATES_SETTING = "rossRetainedCandidates";
+const LIVE_MONITOR_SYMBOLS_SETTING = "rossLiveMonitorSymbols";
 const MAX_RETAINED_CANDIDATES = 30;
 const MOMENTUM_MODES = ["gainers", "most_active", "session_volume"] as const;
 const SCANNER_SESSIONS = ["premarket", "rth", "afterhours", "overnight"] as const;
@@ -73,6 +76,30 @@ function readRetainedCandidates(value: unknown): RetainedCandidateRecord[] {
     .slice(0, MAX_RETAINED_CANDIDATES);
 }
 
+function readLiveMonitorSymbols(value: unknown, retained: readonly RetainedCandidateRecord[]): string[] {
+  if (!Array.isArray(value)) return [];
+  const retainedSymbols = new Set(retained.map((item) => item.symbol));
+  const unique = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.length > 64 || !entry.startsWith("US.") ||
+      !retainedSymbols.has(entry) || unique.has(entry)) continue;
+    unique.add(entry);
+    if (unique.size >= MAX_CANDIDATE_MONITOR_SYMBOLS) break;
+  }
+  return [...unique];
+}
+
+function mergeOneMinuteBars(archived: readonly Bar[], live: readonly Bar[], limit: number): Bar[] {
+  const byBucket = new Map<string, Bar>();
+  for (const bar of archived) byBucket.set(bar.bucketStart, bar);
+  // Live BarStore values win over the historical archive when the same
+  // minute is updated/finalized after monitoring is enabled.
+  for (const bar of live) byBucket.set(bar.bucketStart, bar);
+  return [...byBucket.values()]
+    .sort((a, b) => a.bucketStart.localeCompare(b.bucketStart))
+    .slice(-limit);
+}
+
 interface CandidateHistoryData {
   oneMinuteBars: Bar[];
   dailyBars: Bar[];
@@ -119,7 +146,7 @@ function chartDailyCount(stores: PanelProps["stores"], symbol: string): string {
   return stores.bars.latestBar(symbol, "D") ? "chart loaded" : "not loaded";
 }
 
-export function RossCandidatesPanel({ config, stores, commands, onConfigChange }: PanelProps): JSX.Element {
+export function RossCandidatesPanel({ config, stores, commands, onConfigChange, demandRegistry }: PanelProps): JSX.Element {
   const { palette } = useTheme();
   const [revision, setRevision] = useState(1);
   const [historyBySymbol, setHistoryBySymbol] = useState<Record<string, CandidateHistoryData>>({});
@@ -127,11 +154,55 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
   const [retainedCandidates, setRetainedCandidates] = useState<RetainedCandidateRecord[]>(
     () => readRetainedCandidates(config.settings[RETAINED_CANDIDATES_SETTING]),
   );
+  const [liveMonitorSymbols, setLiveMonitorSymbols] = useState<string[]>(
+    () => readLiveMonitorSymbols(config.settings[LIVE_MONITOR_SYMBOLS_SETTING],
+      readRetainedCandidates(config.settings[RETAINED_CANDIDATES_SETTING])),
+  );
+  const [monitorErrors, setMonitorErrors] = useState<Record<string, string>>({});
+  const activeMonitorDemandIds = useRef(new Set<string>());
 
   const saveRetainedCandidates = useCallback((next: RetainedCandidateRecord[]) => {
     setRetainedCandidates(next);
     onConfigChange({ [RETAINED_CANDIDATES_SETTING]: next });
   }, [onConfigChange]);
+
+  const saveLiveMonitorSymbols = useCallback((next: string[]) => {
+    const normalized = readLiveMonitorSymbols(next, retainedCandidates);
+    setLiveMonitorSymbols(normalized);
+    onConfigChange({ [LIVE_MONITOR_SYMBOLS_SETTING]: normalized });
+  }, [onConfigChange, retainedCandidates]);
+
+  const startLiveMonitoring = useCallback((symbol: string) => {
+    if (!demandRegistry) {
+      setMonitorErrors((current) => ({ ...current, [symbol]: "Live monitoring is unavailable in this panel context." }));
+      return;
+    }
+    if (!retainedCandidates.some((item) => item.symbol === symbol)) return;
+    if (!symbol.startsWith("US.")) {
+      setMonitorErrors((current) => ({ ...current, [symbol]: "Live one-minute monitoring currently supports US symbols only." }));
+      return;
+    }
+    if (liveMonitorSymbols.includes(symbol)) return;
+    if (liveMonitorSymbols.length >= MAX_CANDIDATE_MONITOR_SYMBOLS) {
+      setMonitorErrors((current) => ({ ...current, [symbol]: `The live-monitor shortlist is limited to ${MAX_CANDIDATE_MONITOR_SYMBOLS} symbols.` }));
+      return;
+    }
+    setMonitorErrors((current) => {
+      const next = { ...current };
+      delete next[symbol];
+      return next;
+    });
+    saveLiveMonitorSymbols([...liveMonitorSymbols, symbol]);
+  }, [demandRegistry, retainedCandidates, liveMonitorSymbols, saveLiveMonitorSymbols]);
+
+  const stopLiveMonitoring = useCallback((symbol: string) => {
+    saveLiveMonitorSymbols(liveMonitorSymbols.filter((item) => item !== symbol));
+    setMonitorErrors((current) => {
+      const next = { ...current };
+      delete next[symbol];
+      return next;
+    });
+  }, [liveMonitorSymbols, saveLiveMonitorSymbols]);
 
   const keepCandidate = useCallback((candidate: MomentumScannerCandidate) => {
     if (retainedCandidates.some((item) => item.symbol === candidate.symbol) ||
@@ -148,7 +219,57 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
   const removeRetainedCandidate = useCallback((symbol: string) => {
     if (!retainedCandidates.some((item) => item.symbol === symbol)) return;
     saveRetainedCandidates(retainedCandidates.filter((item) => item.symbol !== symbol));
-  }, [retainedCandidates, saveRetainedCandidates]);
+    saveLiveMonitorSymbols(liveMonitorSymbols.filter((item) => item !== symbol));
+  }, [retainedCandidates, liveMonitorSymbols, saveRetainedCandidates, saveLiveMonitorSymbols]);
+
+  // Reconcile one demand per selected candidate. DemandRegistry keeps the
+  // set reconnect-safe and releases every demand when this panel unmounts.
+  useEffect(() => {
+    if (!demandRegistry) return;
+    const desired = new Map(liveMonitorSymbols.map((symbol) => [
+      `ross-candidate:${config.id}:${symbol}`,
+      symbol,
+    ]));
+    for (const demandId of [...activeMonitorDemandIds.current]) {
+      if (desired.has(demandId)) continue;
+      demandRegistry.release(demandId);
+      activeMonitorDemandIds.current.delete(demandId);
+    }
+    for (const [demandId, symbol] of desired) {
+      if (activeMonitorDemandIds.current.has(demandId)) continue;
+      activeMonitorDemandIds.current.add(demandId);
+      void demandRegistry.ensure(demandId, symbol, "candidate").then((ack) => {
+        if (ack.status !== "accepted") {
+          setMonitorErrors((current) => ({ ...current, [symbol]: ack.reason ?? "The engine rejected this live-monitor demand." }));
+          return;
+        }
+        setMonitorErrors((current) => {
+          const next = { ...current };
+          delete next[symbol];
+          return next;
+        });
+      }).catch((error: unknown) => {
+        setMonitorErrors((current) => ({
+          ...current,
+          [symbol]: error instanceof Error ? error.message : "Live-monitor request failed.",
+        }));
+      });
+    }
+  }, [liveMonitorSymbols, config.id, demandRegistry]);
+
+  useEffect(() => () => {
+    if (!demandRegistry) return;
+    for (const demandId of activeMonitorDemandIds.current) demandRegistry.release(demandId);
+    activeMonitorDemandIds.current.clear();
+  }, [demandRegistry]);
+
+  // A retained candidate that is explicitly removed or automatically rejected
+  // must not keep consuming a live-monitor slot.
+  useEffect(() => {
+    const retainedSymbols = new Set(retainedCandidates.map((item) => item.symbol));
+    const next = liveMonitorSymbols.filter((symbol) => retainedSymbols.has(symbol));
+    if (next.length !== liveMonitorSymbols.length) saveLiveMonitorSymbols(next);
+  }, [retainedCandidates, liveMonitorSymbols, saveLiveMonitorSymbols]);
 
   // Scanner, quote, chart, fundamentals and news are independent stores.
   // Coalesce their updates so one burst only re-runs the candidate evaluator
@@ -237,9 +358,11 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
         ? stores.bars.tailSeries(symbol, "D", MAX_ANALYSIS_DAILY_BARS)
         : [];
       const archived = historyBySymbol[symbol];
-      const oneMinuteBars = archived?.oneMinuteBars.length
-        ? archived.oneMinuteBars
-        : chartOneMinuteBars;
+      const oneMinuteBars = mergeOneMinuteBars(
+        archived?.oneMinuteBars ?? [],
+        chartOneMinuteBars,
+        MAX_ANALYSIS_1M_BARS,
+      );
       const dailyBars = archived?.dailyBars.length
         ? archived.dailyBars
         : chartDailyBars;
@@ -263,9 +386,15 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
         // technical-breakout detector has not yet been integrated.
         catalyst: hasNewsCatalyst ? "fundamental" : "unknown",
       });
-      return { candidate, result, retained, currentlyDiscovered };
+      return {
+        candidate,
+        result,
+        retained,
+        currentlyDiscovered,
+        liveMonitoringRequested: liveMonitorSymbols.includes(symbol),
+      };
     });
-  }, [revision, stores, historyBySymbol, retainedCandidates]);
+  }, [revision, stores, historyBySymbol, retainedCandidates, liveMonitorSymbols]);
 
   // An ELIGIBLE candidate is retained automatically. A previously retained
   // candidate survives temporary PENDING states (for example stale or missing
@@ -320,6 +449,7 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
         <div style={{ color: palette.textMuted, marginTop: 4, fontSize: 10 }}>
           Combined discovery from active Gainers, Most Active and Session Volume Scanner panels
           <span style={{ marginLeft: 8, color: palette.text }}>· {retainedCandidates.length} retained</span>
+          <span style={{ marginLeft: 8, color: palette.accent }}>· {liveMonitorSymbols.length}/{MAX_CANDIDATE_MONITOR_SYMBOLS} live monitors</span>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 1, marginTop: 8, background: palette.border }}>
           {[
@@ -342,7 +472,7 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
         </div>
       ) : (
         <div style={{ padding: "4px 8px 8px" }}>
-          {evaluated.map(({ candidate, result, retained, currentlyDiscovered }) => (
+          {evaluated.map(({ candidate, result, retained, currentlyDiscovered, liveMonitoringRequested }) => (
             <details key={candidate.symbol} style={{ borderBottom: "1px solid " + palette.border }}>
               <summary style={{ display: "grid", gridTemplateColumns: "minmax(70px, 1fr) minmax(50px, auto) minmax(50px, auto) auto", alignItems: "center", gap: 8, padding: "9px 3px", cursor: "pointer", listStylePosition: "inside" }}>
                 <span className="mono" style={{ fontWeight: 700, minWidth: 0 }}>{candidate.symbol}</span>
@@ -371,6 +501,11 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
                       NOT IN CURRENT SCANNERS
                     </span>
                   )}
+                  {liveMonitoringRequested && (
+                    <span style={{ border: "1px solid " + palette.accent, color: result.checks.find((item) => item.id === "intraday-data-freshness")?.state === "pass" ? palette.ok : palette.accent, padding: "2px 5px", fontSize: 9 }}>
+                      {result.checks.find((item) => item.id === "intraday-data-freshness")?.state === "pass" ? "LIVE 1M FRESH" : "LIVE 1M REQUESTED"}
+                    </span>
+                  )}
                 </div>
                 {retained && !currentlyDiscovered && (
                   <div style={{ color: palette.textMuted, fontSize: 9, marginBottom: 7 }}>
@@ -391,6 +526,31 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
                   >
                     {historyLoading[candidate.symbol] ? "Loading archived bars…" : historyBySymbol[candidate.symbol] ? "Refresh archived bars" : "Load archived bars"}
                   </button>
+                  {retained && (liveMonitoringRequested ? (
+                    <button
+                      type="button"
+                      onClick={() => stopLiveMonitoring(candidate.symbol)}
+                      style={{ border: "1px solid " + palette.borderStrong, background: palette.surface, color: palette.accent, padding: "5px 8px", fontSize: 10, cursor: "pointer" }}
+                    >
+                      Stop live monitor
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!demandRegistry || !candidate.symbol.startsWith("US.") || liveMonitorSymbols.length >= MAX_CANDIDATE_MONITOR_SYMBOLS}
+                      onClick={() => startLiveMonitoring(candidate.symbol)}
+                      title={!demandRegistry
+                        ? "Live monitoring is not available in this panel context."
+                        : !candidate.symbol.startsWith("US.")
+                          ? "Live candidate monitoring currently supports US symbols only."
+                          : liveMonitorSymbols.length >= MAX_CANDIDATE_MONITOR_SYMBOLS
+                            ? `The live-monitor shortlist is limited to ${MAX_CANDIDATE_MONITOR_SYMBOLS} symbols.`
+                            : "Request live one-minute bars for this retained candidate."}
+                      style={{ border: "1px solid " + palette.borderStrong, background: palette.surface, color: palette.text, padding: "5px 8px", fontSize: 10, cursor: "pointer", opacity: !demandRegistry || !candidate.symbol.startsWith("US.") || liveMonitorSymbols.length >= MAX_CANDIDATE_MONITOR_SYMBOLS ? 0.5 : 1 }}
+                    >
+                      Monitor live (1m)
+                    </button>
+                  ))}
                   {retained ? (
                     <button
                       type="button"
@@ -416,6 +576,18 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
                     Archive notice: {historyBySymbol[candidate.symbol]!.error}
                   </div>
                 )}
+                {monitorErrors[candidate.symbol] && (
+                  <div style={{ color: palette.danger, fontSize: 10, lineHeight: 1.4, marginBottom: 7 }}>
+                    Live-monitor notice: {monitorErrors[candidate.symbol]}
+                  </div>
+                )}
+                {liveMonitoringRequested && (
+                  <div style={{ color: palette.textMuted, fontSize: 10, lineHeight: 1.4, marginBottom: 7 }}>
+                    {result.checks.find((item) => item.id === "intraday-data-freshness")?.state === "pass"
+                      ? "Fresh one-minute updates are reaching this candidate."
+                      : "The live-monitor demand is requested, but fresh one-minute data has not arrived yet. The freshness check remains unknown until it does."}
+                  </div>
+                )}
                 <div style={{ color: palette.textMuted, fontSize: 9, letterSpacing: ".05em", marginBottom: 3 }}>ELIGIBILITY CHECKS</div>
                 {result.checks.map((check) => (
                   <div key={check.id} style={{ display: "grid", gridTemplateColumns: "minmax(110px, .7fr) minmax(0, 1.5fr) auto", gap: 7, padding: "4px 0", borderTop: "1px solid " + palette.border, alignItems: "start" }}>
@@ -436,7 +608,7 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange }
       )}
 
       <div style={{ padding: "8px 10px", borderTop: "1px solid " + palette.borderStrong, color: palette.textMuted, fontSize: 10, lineHeight: 1.45 }}>
-        Candidates can be kept manually on this panel's persistent shortlist; fully ELIGIBLE candidates are retained automatically. Retained candidates remain through PENDING data states and are removed automatically only when a current scanner observation proves REJECTED. This is retention, not yet continuous live monitoring: fresh one-minute subscriptions are a separate next stage. Moomoo OutstandingShares remains an unverified proxy, and nearby resistance and technical-breakout detection are not connected. This panel is informational and never places orders.
+        Retained candidates persist independently of scanner rankings. You can request live one-minute monitoring for up to {MAX_CANDIDATE_MONITOR_SYMBOLS} retained US symbols; requests use the engine's shared quota-aware demand manager and are released when stopped or when this panel closes. "LIVE 1M FRESH" means a recent minute bar has actually arrived; accepted requests without fresh data remain unknown/PENDING for the freshness criterion. Archived and live candles are merged with live updates taking precedence. Moomoo OutstandingShares remains an unverified proxy, and nearby resistance and technical-breakout detection are not connected. This panel is informational and never places orders.
       </div>
     </div>
   );
