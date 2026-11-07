@@ -669,10 +669,10 @@ func TestEnsureSymbol_ChartAddsCachedDailySubscription(t *testing.T) {
 	}
 }
 
-func TestEnsureSymbol_CandidateDemandUsesOneMinuteBackgroundSeed(t *testing.T) {
+func TestEnsureSymbol_StrategyMonitorUsesQuoteAndOneMinuteBackgroundSeed(t *testing.T) {
 	cd, dem, _ := newCmdWith(t, nil, false)
 	ack, _ := cd.handle(context.Background(), "EnsureSymbol",
-		[]byte(`{"demandId":"ross-candidate-US.AAPL","symbol":"US.AAPL","profile":"candidate"}`), 7, func(wsmsg.AckMsg) {})
+		[]byte(`{"demandId":"ross-setup-monitor-US.AAPL","symbol":"US.AAPL","profile":"strategy"}`), 7, func(wsmsg.AckMsg) {})
 	if ack.Status != "accepted" {
 		t.Fatalf("ack = %+v", ack)
 	}
@@ -680,26 +680,26 @@ func TestEnsureSymbol_CandidateDemandUsesOneMinuteBackgroundSeed(t *testing.T) {
 		t.Fatalf("EnsureDemand calls = %d, want 1", len(dem.ensured))
 	}
 	d := dem.ensured[0].d
-	if d.ID != "dyn/7/ross-candidate-US.AAPL" || d.Symbol != "US.AAPL" {
-		t.Fatalf("candidate demand identity = %+v", d)
+	if d.ID != "dyn/7/ross-setup-monitor-US.AAPL" || d.Symbol != "US.AAPL" {
+		t.Fatalf("strategy-monitor demand identity = %+v", d)
 	}
 	if d.Focused || d.Background {
-		t.Fatalf("candidate demand must be ordinary but non-focused: %+v", d)
+		t.Fatalf("strategy-monitor demand must be ordinary but non-focused: %+v", d)
 	}
 	if !d.WantsHistory || !d.BackgroundSeed || d.CachedDaily {
-		t.Fatalf("candidate history/seed flags = %+v", d)
+		t.Fatalf("strategy-monitor history/seed flags = %+v", d)
 	}
-	if !reflect.DeepEqual(d.Subs, []feed.SubType{feed.SubTicker, feed.SubKL1m}) {
-		t.Fatalf("candidate subscriptions = %v, want ticker + 1m K-line", d.Subs)
+	if !reflect.DeepEqual(d.Subs, []feed.SubType{feed.SubQuote, feed.SubTicker, feed.SubKL1m}) {
+		t.Fatalf("strategy-monitor subscriptions = %v, want ticker + 1m K-line", d.Subs)
 	}
 }
 
-func TestEnsureSymbol_CandidateDemandRejectsNonUSMarket(t *testing.T) {
+func TestEnsureSymbol_StrategyMonitorRejectsNonUSMarket(t *testing.T) {
 	cd, dem, _ := newCmdWith(t, nil, false)
 	ack, _ := cd.handle(context.Background(), "EnsureSymbol",
-		[]byte(`{"demandId":"ross-candidate-HK.00700","symbol":"HK.00700","profile":"candidate"}`), 7, func(wsmsg.AckMsg) {})
+		[]byte(`{"demandId":"ross-setup-monitor-HK.00700","symbol":"HK.00700","profile":"strategy"}`), 7, func(wsmsg.AckMsg) {})
 	if ack.Status != "blocked" || ack.Reason != "bad profile" || len(dem.ensured) != 0 {
-		t.Fatalf("non-US candidate demand = %+v, ensured=%d", ack, len(dem.ensured))
+		t.Fatalf("non-US strategy-monitor demand = %+v, ensured=%d", ack, len(dem.ensured))
 	}
 }
 

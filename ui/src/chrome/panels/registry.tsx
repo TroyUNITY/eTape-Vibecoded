@@ -12,7 +12,7 @@ import { ChartPanel } from "./ChartPanel";
 import { LadderPanel } from "./LadderPanel";
 import { TapePanel } from "./TapePanel";
 import { ScannerPanel } from "./ScannerPanel";
-import { RossCandidatesPanel } from "./RossCandidatesPanel";
+import { RossSetupMonitorPanel } from "./RossSetupMonitorPanel";
 import { WatchlistPanel } from "./WatchlistPanel";
 import { StockInfoPanel } from "./StockInfoPanel";
 import { TradeGuardPanel } from "./TradeGuardPanel";
@@ -105,6 +105,15 @@ const stockInfoPanel: PanelDef = {
   demand: "interest",
 };
 
+const rossSetupMonitorPanel: PanelDef = {
+  component: RossSetupMonitorPanel,
+  topics: ["md.quote", "md.bars"],
+  title: "Ross Setup Monitor",
+  glyph: "RC",
+  description: "Manually selected symbols and live Ross setup monitoring",
+  symbolBearing: false,
+};
+
 // Plan 1 registered the two stack-proving panels; Plan 2 added the chart panel;
 // Plan 3 added the L2 ladder + time & sales; Plan 4 added scanner / stock info;
 // Plan 5 adds the execution surfaces (account-bar / positions / open-orders /
@@ -168,14 +177,9 @@ export const PANELS: Record<string, PanelDef> = {
     symbolBearing: false,
     headerControls: true,
   },
-  "ross-candidates": {
-    component: RossCandidatesPanel,
-    topics: ["scanner.rank", "md.quote", "md.bars", "stock.detail", "news.item"],
-    title: "Ross Candidates",
-    glyph: "RC",
-    description: "Combined momentum candidate eligibility",
-    symbolBearing: false,
-  },
+  "ross-setup-monitor": rossSetupMonitorPanel,
+  // Saved workspaces may still carry the former scanner-candidate panel id.
+  "ross-candidates": rossSetupMonitorPanel,
   "watchlist": {
     component: WatchlistPanel,
     topics: ["watchlist.rows"],
@@ -261,7 +265,7 @@ export const PANELS: Record<string, PanelDef> = {
 export const DEV_PANELS = new Set(["smoke-painter"]);
 export const isDevPanel = (panelId: string): boolean => DEV_PANELS.has(panelId);
 
-const CATALOG_ORDER = ["chart", "trade-guard", "ladder", "tape", "scanner", "ross-candidates", "watchlist", "stock-info", "locates",
+const CATALOG_ORDER = ["chart", "trade-guard", "ladder", "tape", "scanner", "ross-setup-monitor", "watchlist", "stock-info", "locates",
   "account", "order-ticket", "alerts", "connection-status"];
 // "account-bar", "positions", and (as of Task 8) "open-orders" all stay
 // registered in PANELS (above) as back-compat aliases for saved workspace docs,

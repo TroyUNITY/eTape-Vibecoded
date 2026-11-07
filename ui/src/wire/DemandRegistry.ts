@@ -1,11 +1,13 @@
 import type { AckMsg } from "./contract";
 import type { ConnState } from "./WsClient";
 
-export type DemandProfile = "chart" | "watch" | "focused" | "interest" | "candidate";
+export type DemandProfile = "chart" | "watch" | "focused" | "interest" | "strategy" | "candidate";
 
-// Candidate monitoring is deliberately bounded at the UI demand boundary.
-// The provider quota manager still has final authority over actual admission.
-export const MAX_CANDIDATE_MONITOR_SYMBOLS = 5;
+// Manual Ross strategy monitoring is deliberately bounded at the UI demand
+// boundary. The provider quota manager still has final authority over admission.
+export const MAX_STRATEGY_MONITOR_SYMBOLS = 5;
+const isStrategyMonitorProfile = (profile: DemandProfile): boolean =>
+  profile === "strategy" || profile === "candidate"; // "candidate" is a legacy alias.
 
 interface DemandClient {
   sendCommand(name: string, args: unknown): Promise<AckMsg>;
@@ -13,11 +15,11 @@ interface DemandClient {
 }
 
 const ACCEPTED: AckMsg = { kind: "ack", corrId: "", status: "accepted" };
-const CANDIDATE_LIMIT_BLOCKED: AckMsg = {
+const STRATEGY_LIMIT_BLOCKED: AckMsg = {
   kind: "ack",
   corrId: "",
   status: "blocked",
-  reason: `live candidate monitoring is limited to ${MAX_CANDIDATE_MONITOR_SYMBOLS} unique symbols`,
+  reason: `live strategy monitoring is limited to ${MAX_STRATEGY_MONITOR_SYMBOLS} unique symbols`,
 };
 
 // DemandRegistry drives per-panel EnsureSymbol/ReleaseSymbol commands and keeps
@@ -62,8 +64,8 @@ export class DemandRegistry {
   async ensure(panelId: string, symbol: string, profile: DemandProfile): Promise<AckMsg> {
     const cur = this.live.get(panelId);
     if (cur && cur.symbol === symbol && cur.profile === profile) return ACCEPTED;
-    if (profile === "candidate" && !this.withinCandidateMonitorLimit(panelId, symbol)) {
-      return CANDIDATE_LIMIT_BLOCKED;
+    if (isStrategyMonitorProfile(profile) && !this.withinStrategyMonitorLimit(panelId, symbol)) {
+      return STRATEGY_LIMIT_BLOCKED;
     }
     const myEpoch = (this.epoch.get(panelId) ?? 0) + 1;
     this.epoch.set(panelId, myEpoch);
@@ -86,18 +88,18 @@ export class DemandRegistry {
     }
   }
 
-  private withinCandidateMonitorLimit(panelId: string, symbol: string): boolean {
+  private withinStrategyMonitorLimit(panelId: string, symbol: string): boolean {
     const otherSymbols = new Set<string>();
     for (const [id, demand] of this.live) {
-      if (id !== panelId && demand.profile === "candidate") otherSymbols.add(demand.symbol);
+      if (id !== panelId && isStrategyMonitorProfile(demand.profile)) otherSymbols.add(demand.symbol);
     }
     for (const [id, demand] of this.pendingDemand) {
-      if (id !== panelId && demand.profile === "candidate") otherSymbols.add(demand.symbol);
+      if (id !== panelId && isStrategyMonitorProfile(demand.profile)) otherSymbols.add(demand.symbol);
     }
-    // The same symbol may be monitored by two Ross Candidates panels without
-    // consuming two unique-symbol slots. Replacing this panel's own candidate
-    // demand also reuses its existing slot.
-    return otherSymbols.has(symbol) || otherSymbols.size < MAX_CANDIDATE_MONITOR_SYMBOLS;
+    // The same symbol may be monitored by more than one Ross Setup Monitor
+    // panel without consuming multiple unique-symbol slots. Replacing this
+    // panel's own demand also reuses its existing slot.
+    return otherSymbols.has(symbol) || otherSymbols.size < MAX_STRATEGY_MONITOR_SYMBOLS;
   }
 
   release(panelId: string): void {
