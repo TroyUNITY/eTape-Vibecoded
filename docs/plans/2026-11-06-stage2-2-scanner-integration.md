@@ -75,3 +75,6 @@ No provider key, paid subscription, licensing agreement, or provider adapter has
 3. Expand a candidate and click **Load archived bars**. The panel should update its history counts and eligibility checks. If the newest archived one-minute bar is stale, the freshness check should remain unknown; loading history is not a live subscription.
 4. Confirm Moomoo-only share figures remain `PENDING` for free float, even when the share count is below 100 million.
 5. Confirm the panel does not alter Scanner filters, start chart subscriptions, or submit orders.
+
+
+The CI strategy project runs eligibility, scanner aggregation, panel registry, and Ross Candidates panel tests before the rendering golden-image groups, so candidate-specific regressions are reported even when an unrelated visual baseline group fails.
