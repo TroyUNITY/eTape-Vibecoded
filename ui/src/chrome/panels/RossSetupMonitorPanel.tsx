@@ -286,7 +286,7 @@ export function RossSetupMonitorPanel({ config, stores, onConfigChange, demandRe
 
               const renderCandle = (bar: typeof latest1m, timeframe: string) => (
                 <div>
-                  <div style={lineLabel}>{timeframe} · {bar?.inProgress ? "FORMING" : "CLOSED"}</div>
+                  <div style={lineLabel}>{timeframe} · {bar ? (bar.inProgress ? "FORMING" : "CLOSED") : "NO DATA"}</div>
                   {bar ? (
                     <div style={detail}>
                       C {formatPrice(bar.c, quoteDecimals(bar.c, 2))} · {formatCompactShares(bar.v)} vol
