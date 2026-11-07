@@ -130,11 +130,17 @@ describe("panel minimum widths", () => {
 
 describe("Ross Setup Monitor panel", () => {
   it("subscribes only to quotes and bars for manually selected symbols", () => {
-    expect(PANELS["ross-candidates"]).toBeDefined();
-    expect(PANELS["ross-candidates"].title).toBe("Ross Setup Monitor");
+    expect(PANELS["ross-setup-monitor"]).toBeDefined();
+    expect(PANELS["ross-setup-monitor"].title).toBe("Ross Setup Monitor");
+    expect(PANELS["ross-setup-monitor"].topics).toEqual(["md.quote", "md.bars"]);
+    expect(PANELS["ross-setup-monitor"].symbolBearing).toBe(false);
+    expect(PANELS["ross-setup-monitor"].demand).toBeUndefined();
+    expect(CATALOG.map((panel) => panel.panelId)).toContain("ross-setup-monitor");
+    expect(CATALOG.map((panel) => panel.panelId)).not.toContain("ross-candidates");
+  });
+
+  it("keeps the former Ross Candidates id as a saved-workspace alias", () => {
+    expect(PANELS["ross-candidates"].component).toBe(PANELS["ross-setup-monitor"].component);
     expect(PANELS["ross-candidates"].topics).toEqual(["md.quote", "md.bars"]);
-    expect(PANELS["ross-candidates"].symbolBearing).toBe(false);
-    expect(PANELS["ross-candidates"].demand).toBeUndefined();
-    expect(CATALOG.map((panel) => panel.panelId)).toContain("ross-candidates");
   });
 });
