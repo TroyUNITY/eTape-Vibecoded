@@ -59,7 +59,9 @@ function demandId(panelId: string, symbol: string): string {
 export function RossSetupMonitorPanel({ config, stores, onConfigChange, demandRegistry }: PanelProps): JSX.Element {
   const { palette } = useTheme();
   const [symbols, setSymbols] = useState<string[]>(
-    () => readWatchedSymbols(config.settings[WATCHED_SYMBOLS_SETTING]),
+    () => readWatchedSymbols(
+      config.settings[WATCHED_SYMBOLS_SETTING] ?? config.settings.rossLiveMonitorSymbols,
+    ),
   );
   const [addValue, setAddValue] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
