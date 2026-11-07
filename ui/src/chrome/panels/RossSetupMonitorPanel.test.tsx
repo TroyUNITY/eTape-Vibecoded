@@ -116,7 +116,7 @@ describe("RossSetupMonitorPanel", () => {
       fireEvent.click(screen.getByRole("button", { name: "Add" }));
     }
     await waitFor(() => expect(screen.getByText(/5\/5 monitored/)).toBeTruthy());
-    expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+    expect((screen.getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled).toBe(true);
     const lastPatch = onConfigChange.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(lastPatch.rossSetupMonitorSymbols).toEqual([
       "US.AAPL", "US.MSFT", "US.NVDA", "US.CDT", "US.VSA",
@@ -159,7 +159,10 @@ describe("RossSetupMonitorPanel", () => {
       demandRegistry,
     });
 
-    expect(screen.getByText("2/5 monitored")).toBeTruthy();
+    expect(screen.getByText((_, element) =>
+      element?.tagName.toLowerCase() === "span" &&
+      element.textContent?.replace(/\\s/g, "").includes("2/5monitored") === true
+    )).toBeTruthy();
     await waitFor(() => {
       expect(demandRegistry.ensure).toHaveBeenCalledWith(
         "ross-setup-monitor:p-ross:US.CDT",
