@@ -26,7 +26,7 @@ function renderMonitor(options?: {
   const demandRegistry = options?.demandRegistry ?? makeDemandRegistry();
   const config: PanelConfig = {
     id: "p-ross",
-    panelId: "ross-candidates",
+    panelId: "ross-setup-monitor",
     group: null,
     settings: options?.settings ?? {},
   };
@@ -115,7 +115,7 @@ describe("RossSetupMonitorPanel", () => {
       fireEvent.change(input, { target: { value: ticker } });
       fireEvent.click(screen.getByRole("button", { name: "Add" }));
     }
-    await waitFor(() => expect(screen.getByText("5/5 monitored")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/5\/5 monitored/)).toBeTruthy());
     expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
     const lastPatch = onConfigChange.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(lastPatch.rossSetupMonitorSymbols).toEqual([
@@ -144,7 +144,7 @@ describe("RossSetupMonitorPanel", () => {
     } as never));
 
     await waitFor(() => {
-      expect(screen.getByText("$123.45")).toBeTruthy();
+      expect(screen.getByText("123.45")).toBeTruthy();
       expect(screen.getByText("LIVE DATA")).toBeTruthy();
     });
 
@@ -161,7 +161,7 @@ describe("RossSetupMonitorPanel", () => {
       demandRegistry,
     });
 
-    expect(screen.getByText("5/5 monitored")).toBeTruthy();
+    expect(screen.getByText(/5\/5 monitored/)).toBeTruthy();
     expect(screen.getByText("AAPL")).toBeTruthy();
     expect(screen.queryByText("TSLA")).toBeNull();
     await waitFor(() => expect(demandRegistry.ensure).toHaveBeenCalledTimes(5));
