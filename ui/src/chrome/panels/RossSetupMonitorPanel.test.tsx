@@ -161,7 +161,7 @@ describe("RossSetupMonitorPanel", () => {
 
     expect(screen.getByText((_, element) =>
       element?.tagName.toLowerCase() === "span" &&
-      element.textContent?.replace(/\\s/g, "").includes("2/5monitored") === true
+      element.textContent?.replace(/\s/g, "").includes("2/5monitored") === true
     )).toBeTruthy();
     await waitFor(() => {
       expect(demandRegistry.ensure).toHaveBeenCalledWith(
