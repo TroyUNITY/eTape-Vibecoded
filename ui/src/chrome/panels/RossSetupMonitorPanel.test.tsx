@@ -209,7 +209,7 @@ describe("RossSetupMonitorPanel", () => {
     expect(screen.getByText(/1M · FORMING/)).toBeTruthy();
     expect(screen.getByText(/5M · CLOSED/)).toBeTruthy();
     expect(screen.getByText(/250 vol/)).toBeTruthy();
-    expect(screen.getByText("FRESH")).toBeTruthy();
+    expect(screen.getByText(/QUOTE · FRESH/)).toBeTruthy();
   });
 
   it("releases all remaining demands on unmount", async () => {
