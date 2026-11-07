@@ -101,7 +101,7 @@ jobs:
         run: npx vitest run --project strategy
 
       - name: Refresh golden screenshots for intentional text update
-        if: github.head_ref == 'stage2-5-technical-analysis'
+        if: github.head_ref == 'stage2-5-technical-analysis' || github.head_ref == 'stage2-4-bounded-live-monitoring' || github.head_ref == 'stage3-candidate-retention'
         working-directory: ui
         shell: pwsh
         run: |
@@ -109,7 +109,7 @@ jobs:
           npm run test:golden
 
       - name: Upload refreshed golden screenshots for review
-        if: github.head_ref == 'stage2-5-technical-analysis'
+        if: github.head_ref == 'stage2-5-technical-analysis' || github.head_ref == 'stage2-4-bounded-live-monitoring' || github.head_ref == 'stage3-candidate-retention'
         uses: actions/upload-artifact@v4
         with:
           name: updated-ui-goldens
@@ -122,7 +122,7 @@ jobs:
 
       # Build already runs typecheck (npm run typecheck && vite build).
       - name: Commit refreshed tape goldens to the PR branch
-        if: github.head_ref == 'stage2-5-technical-analysis'
+        if: github.head_ref == 'stage2-5-technical-analysis' || github.head_ref == 'stage2-4-bounded-live-monitoring' || github.head_ref == 'stage3-candidate-retention'
         working-directory: ui
         shell: pwsh
         run: |
