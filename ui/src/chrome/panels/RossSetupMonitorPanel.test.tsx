@@ -48,6 +48,31 @@ function renderMonitor(options?: {
   return { ...view, stores, onConfigChange, demandRegistry, config };
 }
 
+function applyBar(
+  stores: ReturnType<typeof makeStores>,
+  timeframe: string,
+  bucketStart: string,
+  values: Partial<{ o: number; h: number; l: number; c: number; v: number; inProgress: boolean; gap: boolean; volumeOnly: boolean }> = {},
+) {
+  stores.bars.apply({
+    kind: "delta",
+    topic: "md.bars",
+    key: "US.AAPL:" + timeframe,
+    payload: {
+      symbol: "US.AAPL",
+      timeframe,
+      bucketStart,
+      o: 123,
+      h: 125,
+      l: 122,
+      c: 124,
+      v: 1_200,
+      inProgress: false,
+      ...values,
+    },
+  } as never);
+}
+
 describe("RossSetupMonitorPanel", () => {
   it("normalizes a manually entered US ticker, persists it, and starts strategy monitoring", async () => {
     const onConfigChange = vi.fn();
@@ -68,6 +93,7 @@ describe("RossSetupMonitorPanel", () => {
       );
       expect(screen.getByText("AAPL")).toBeTruthy();
     });
+    expect(screen.getByText("ENGINE ACCEPTED")).toBeTruthy();
   });
 
   it("restores saved symbols and releases their subscriptions when removed", async () => {
@@ -123,7 +149,7 @@ describe("RossSetupMonitorPanel", () => {
     ]);
   });
 
-  it("shows fresh quote data and releases all remaining demands on unmount", async () => {
+  it("uses the provider quote timestamp for quote freshness and never infers live data from a 1m bucket", async () => {
     const demandRegistry = makeDemandRegistry();
     const view = renderMonitor({
       settings: { rossSetupMonitorSymbols: ["US.AAPL"] },
@@ -131,23 +157,69 @@ describe("RossSetupMonitorPanel", () => {
     });
 
     await waitFor(() => expect(demandRegistry.ensure).toHaveBeenCalledTimes(1));
-    act(() => view.stores.quote.apply({
-      kind: "snapshot",
-      topic: "md.quote",
-      payload: {
-        symbol: "US.AAPL",
-        bid: 123.4,
-        ask: 123.5,
-        last: 123.45,
-        ts: new Date().toISOString(),
-      },
-    } as never));
-
-    await waitFor(() => {
-      expect(screen.getByText("123.45")).toBeTruthy();
-      expect(screen.getByText("LIVE DATA")).toBeTruthy();
+    const oldBucket = new Date(Date.now() - 30_000).toISOString();
+    act(() => {
+      view.stores.quote.apply({
+        kind: "snapshot",
+        topic: "md.quote",
+        payload: {
+          symbol: "US.AAPL",
+          bid: 123.4,
+          ask: 123.5,
+          last: 123.45,
+          ts: new Date(Date.now() - 60_000).toISOString(),
+        },
+      } as never);
+      applyBar(view.stores, "1m", oldBucket, { inProgress: true });
     });
 
+    expect(screen.getByText("123.45")).toBeTruthy();
+    expect(screen.getByText(/QUOTE · STALE/)).toBeTruthy();
+    expect(screen.getByText(/1M · FORMING/)).toBeTruthy();
+    expect(screen.queryByText("LIVE DATA")).toBeNull();
+  });
+
+  it("shows ticker-derived 10s prints and separate 1m and 5m candle states", async () => {
+    const demandRegistry = makeDemandRegistry();
+    const view = renderMonitor({
+      settings: { rossSetupMonitorSymbols: ["US.AAPL"] },
+      demandRegistry,
+    });
+
+    await waitFor(() => expect(demandRegistry.ensure).toHaveBeenCalledTimes(1));
+    const now = Date.now();
+    act(() => {
+      view.stores.quote.apply({
+        kind: "snapshot",
+        topic: "md.quote",
+        payload: {
+          symbol: "US.AAPL",
+          bid: 123.4,
+          ask: 123.5,
+          last: 123.45,
+          ts: new Date(now).toISOString(),
+        },
+      } as never);
+      applyBar(view.stores, "10s", new Date(now - 5_000).toISOString(), { v: 250, inProgress: true, gap: true });
+      applyBar(view.stores, "1m", new Date(now - 20_000).toISOString(), { inProgress: true });
+      applyBar(view.stores, "5m", new Date(now - 120_000).toISOString(), { inProgress: false });
+    });
+
+    expect(screen.getByText(/10S PRINTS · GAP/)).toBeTruthy();
+    expect(screen.getByText(/1M · FORMING/)).toBeTruthy();
+    expect(screen.getByText(/5M · CLOSED/)).toBeTruthy();
+    expect(screen.getByText(/250 vol/)).toBeTruthy();
+    expect(screen.getByText("FRESH")).toBeTruthy();
+  });
+
+  it("releases all remaining demands on unmount", async () => {
+    const demandRegistry = makeDemandRegistry();
+    const view = renderMonitor({
+      settings: { rossSetupMonitorSymbols: ["US.AAPL"] },
+      demandRegistry,
+    });
+
+    await waitFor(() => expect(demandRegistry.ensure).toHaveBeenCalledTimes(1));
     view.unmount();
     expect(demandRegistry.release).toHaveBeenCalledWith("ross-setup-monitor:p-ross:US.AAPL");
   });
