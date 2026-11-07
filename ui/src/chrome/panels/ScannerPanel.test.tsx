@@ -41,6 +41,38 @@ function renderPanel(
   return { scanner, focus, onConfigChange, commands, ...view };
 }
 
+describe("ScannerPanel Strategy Scanner", () => {
+  it("shows strategy columns, the limited-coverage note and local analysis filters", () => {
+    const { scanner, onConfigChange } = renderPanel();
+    act(() => scanner.apply({
+      kind: "snapshot",
+      topic: "scanner.rank",
+      key: "premarket",
+      payload: {
+        refreshedAt: new Date().toISOString(),
+        status: "ready",
+        rows: [{ ...scannerShortInterestDefaults, symbol: "US.STRAT", changePct: 20, last: 5, floatShares: 5_000_000, volume: 1_000_000, relativeVolume: 12 }],
+      },
+    } as never));
+
+    expect(screen.getByText("Setup")).toBeTruthy();
+    expect(screen.getByText("Status")).toBeTruthy();
+    expect(screen.getByText("Quality")).toBeTruthy();
+    expect(screen.getByTestId("strategy-scanner-coverage").textContent).toContain("up to 30 candidates");
+    expect(screen.getByText("Unknown")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "filters" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "strategy setup filter" }), { target: { value: "micro" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "strategy status filter" }), { target: { value: "watch" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "strategy eligibility filter" }), { target: { value: "eligible" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(onConfigChange).toHaveBeenCalledWith(expect.objectContaining({
+      strategyScannerFilters: { setup: "micro", status: "watch", eligibility: "eligible" },
+    }));
+  });
+});
+
 describe("ScannerPanel", () => {
   it("formats sub-dollar Last prices without changing dollar turnover", () => {
     const { scanner } = renderPanel();
@@ -147,7 +179,7 @@ describe("ScannerPanel", () => {
       "Symbol", "%", "Last", "Float", "REL VOL", "Session Vol", "Vol", "Turnover", "Short Int",
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Reset columns" }));
-    expect(onConfigChange).toHaveBeenLastCalledWith(expect.objectContaining({ scannerColumns: { order: ["changePct", "last", "float", "relVol", "vol", "sessionVol", "turnover", "shortInterest"], hidden: [] } }));
+    expect(onConfigChange).toHaveBeenLastCalledWith(expect.objectContaining({ scannerColumns: { order: ["changePct", "last", "float", "relVol", "vol", "sessionVol", "turnover", "shortInterest", "strategySetup", "strategyStatus", "strategyQuality"], hidden: [] } }));
   });
 
   it("falls back from a hidden active sort to the mode default", () => {
@@ -569,7 +601,7 @@ describe("ScannerPanel", () => {
     expect(commands.sendCommand).toHaveBeenCalledWith("SetScannerFilters", expect.objectContaining({
       workspaceId: "main", panelId: "scanner-lowfloat", filters: expect.objectContaining({ maxFloatShares: 20_000_000 }),
     }));
-    await waitFor(() => expect(onConfigChange).toHaveBeenCalledWith({ scannerFilters: expect.objectContaining({ maxFloatShares: 20_000_000 }) }));
+    await waitFor(() => expect(onConfigChange).toHaveBeenCalledWith(expect.objectContaining({ scannerFilters: expect.objectContaining({ maxFloatShares: 20_000_000 }) })));
   });
 
   it("Reset defaults clears the draft inputs without persisting until Apply", () => {

@@ -4,7 +4,7 @@ import { useTheme } from "../ThemeProvider";
 import type { Palette } from "../../render/palette";
 import { TradeGuardTracker, type GuardCheck, type GuardStatus } from "../../strategy/tradeGuard";
 
-const ANALYSIS_COALESCE_MS = 2_000;
+const ANALYSIS_COALESCE_MS = 5_000;
 const MAX_ANALYSIS_1M_BARS = 12_000;
 const MAX_ANALYSIS_DAILY_BARS = 260;
 
@@ -234,7 +234,7 @@ export function TradeGuardPanel({ config, stores, linkGroups, group: groupProp, 
           ? "Catalyst context: " + catalyst.headline
           : "No high-scoring catalyst headline is available. Quantin's Pine script does not use news as a hard gate."}
         <br />
-        Trade Guard coalesces selected-symbol updates and recalculates at most once every two seconds during active updates. Analysis uses a bounded 12,000-bar one-minute history.
+        Trade Guard coalesces selected-symbol updates and recalculates at most once every five seconds during active updates. Analysis uses a bounded 12,000-bar one-minute history.
         <br />
         A trigger, stop or 2R event is calculated from chart prices only. Trade Guard never sends orders or represents broker fills.
       </div>

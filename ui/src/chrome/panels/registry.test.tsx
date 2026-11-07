@@ -3,8 +3,8 @@ import { PANELS, CATALOG, isDevPanel } from "./registry";
 import { TAPE_MIN_WIDTH } from "../../render/tape/tapeLayout";
 
 describe("panel registry — monitoring surfaces", () => {
-  it("registers scanner only with the scanner topics", () => {
-    expect(PANELS.scanner.topics).toEqual(["scanner.rank", "scanner.hit"]);
+  it("registers scanner rank and watched market bars for Strategy Scanner analysis", () => {
+    expect(PANELS.scanner.topics).toEqual(["scanner.rank", "scanner.hit", "md.bars"]);
     expect(PANELS.scanner.headerControls).toBe(true);
     expect(PANELS.movers).toBeUndefined();
   });
