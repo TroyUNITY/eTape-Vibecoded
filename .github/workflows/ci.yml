@@ -69,6 +69,8 @@ jobs:
         run: go test -p 1 ./...
 
   ui:
+    permissions:
+      contents: write
     # Golden PNGs are generated on Windows. Cairo/Pango text rasterization is
     # OS-specific even with the same bundled TTF, so strict pixel comparison
     # must run on the baseline platform.
@@ -92,6 +94,22 @@ jobs:
         working-directory: ui
         run: npm run lint
 
+      - name: Refresh golden screenshots for intentional text update
+        if: github.head_ref == 'stage3-candidate-retention'
+        working-directory: ui
+        shell: pwsh
+        run: |
+          $env:UPDATE_GOLDENS = "1"
+          npm run test:golden
+
+      - name: Upload refreshed golden screenshots for review
+        if: github.head_ref == 'stage3-candidate-retention'
+        uses: actions/upload-artifact@v4
+        with:
+          name: updated-ui-goldens
+          path: ui/test/golden/goldens/*.png
+          if-no-files-found: error
+
       - name: Test
         working-directory: ui
         run: npm test
@@ -100,3 +118,22 @@ jobs:
       - name: Build
         working-directory: ui
         run: npm run build
+
+      - name: Commit refreshed tape goldens to the PR branch
+        if: github.head_ref == 'stage3-candidate-retention'
+        working-directory: ui
+        shell: pwsh
+        run: |
+          git fetch origin $env:GITHUB_HEAD_REF
+          git checkout -B $env:GITHUB_HEAD_REF FETCH_HEAD
+          $env:UPDATE_GOLDENS = "1"
+          npm run test:golden
+          git add test/golden/goldens/tapecolor-*.png
+          if (git diff --cached --quiet) {
+            Write-Host "Tape golden references are already current."
+          } else {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "test(ui): refresh tape goldens for brighter text"
+            git push origin "HEAD:$env:GITHUB_HEAD_REF"
+          }

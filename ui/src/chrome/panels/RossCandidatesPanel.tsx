@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PanelProps } from "./registry";
 import { useTheme } from "../ThemeProvider";
 import type { Palette } from "../../render/palette";
@@ -9,9 +9,68 @@ import type { Bar, QueryCandidateHistoryResult } from "../../wire/contract";
 const MAX_ANALYSIS_1M_BARS = 12_000;
 const MAX_ANALYSIS_DAILY_BARS = 260;
 
+interface RetainedCandidateRecord {
+  symbol: string;
+  retainedAt: string;
+  lastSeenAt: string;
+  snapshot: MomentumScannerCandidate;
+}
+
 interface EvaluatedCandidate {
   candidate: MomentumScannerCandidate;
   result: CandidateEligibilityResult;
+  retained: RetainedCandidateRecord | null;
+  currentlyDiscovered: boolean;
+}
+
+const RETAINED_CANDIDATES_SETTING = "rossRetainedCandidates";
+const MAX_RETAINED_CANDIDATES = 30;
+const MOMENTUM_MODES = ["gainers", "most_active", "session_volume"] as const;
+const SCANNER_SESSIONS = ["premarket", "rth", "afterhours", "overnight"] as const;
+
+function isNullableNumber(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isMomentumScannerCandidate(value: unknown): value is MomentumScannerCandidate {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.symbol === "string" && row.symbol.length > 0 && row.symbol.length <= 64 &&
+    typeof row.shortSellRestricted === "boolean" &&
+    isNullableNumber(row.changePct) && isNullableNumber(row.last) &&
+    isNullableNumber(row.floatShares) && isNullableNumber(row.volume) &&
+    isNullableNumber(row.sessionVolume) && isNullableNumber(row.turnover) &&
+    isNullableNumber(row.relativeVolume) && isNullableNumber(row.shortInterest) &&
+    (typeof row.shortInterestAsOf === "string" || row.shortInterestAsOf === null) &&
+    typeof row.isUnseen === "boolean" && typeof row.isNewHit === "boolean" &&
+    typeof row.muted === "boolean" &&
+    Array.isArray(row.sourceModes) && row.sourceModes.every((mode) => MOMENTUM_MODES.includes(mode as typeof MOMENTUM_MODES[number])) &&
+    Array.isArray(row.scannerIds) && row.scannerIds.every((id) => typeof id === "string" && id.length <= 256) &&
+    typeof row.session === "string" && SCANNER_SESSIONS.includes(row.session as typeof SCANNER_SESSIONS[number]) &&
+    (typeof row.refreshedAt === "string" || row.refreshedAt === null);
+}
+
+function readRetainedCandidates(value: unknown): RetainedCandidateRecord[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const records: RetainedCandidateRecord[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.symbol !== "string" || seen.has(record.symbol) ||
+      typeof record.retainedAt !== "string" || typeof record.lastSeenAt !== "string" ||
+      !isMomentumScannerCandidate(record.snapshot) || record.snapshot.symbol !== record.symbol) continue;
+    seen.add(record.symbol);
+    records.push({
+      symbol: record.symbol,
+      retainedAt: record.retainedAt,
+      lastSeenAt: record.lastSeenAt,
+      snapshot: record.snapshot,
+    });
+  }
+  return records
+    .sort((a, b) => Date.parse(b.retainedAt) - Date.parse(a.retainedAt))
+    .slice(0, MAX_RETAINED_CANDIDATES);
 }
 
 interface CandidateHistoryData {
@@ -60,11 +119,36 @@ function chartDailyCount(stores: PanelProps["stores"], symbol: string): string {
   return stores.bars.latestBar(symbol, "D") ? "chart loaded" : "not loaded";
 }
 
-export function RossCandidatesPanel({ stores, commands }: PanelProps): JSX.Element {
+export function RossCandidatesPanel({ config, stores, commands, onConfigChange }: PanelProps): JSX.Element {
   const { palette } = useTheme();
   const [revision, setRevision] = useState(1);
   const [historyBySymbol, setHistoryBySymbol] = useState<Record<string, CandidateHistoryData>>({});
   const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
+  const [retainedCandidates, setRetainedCandidates] = useState<RetainedCandidateRecord[]>(
+    () => readRetainedCandidates(config.settings[RETAINED_CANDIDATES_SETTING]),
+  );
+
+  const saveRetainedCandidates = useCallback((next: RetainedCandidateRecord[]) => {
+    setRetainedCandidates(next);
+    onConfigChange({ [RETAINED_CANDIDATES_SETTING]: next });
+  }, [onConfigChange]);
+
+  const keepCandidate = useCallback((candidate: MomentumScannerCandidate) => {
+    if (retainedCandidates.some((item) => item.symbol === candidate.symbol) ||
+      retainedCandidates.length >= MAX_RETAINED_CANDIDATES) return;
+    const now = new Date().toISOString();
+    saveRetainedCandidates([{
+      symbol: candidate.symbol,
+      retainedAt: now,
+      lastSeenAt: candidate.refreshedAt || now,
+      snapshot: candidate,
+    }, ...retainedCandidates]);
+  }, [retainedCandidates, saveRetainedCandidates]);
+
+  const removeRetainedCandidate = useCallback((symbol: string) => {
+    if (!retainedCandidates.some((item) => item.symbol === symbol)) return;
+    saveRetainedCandidates(retainedCandidates.filter((item) => item.symbol !== symbol));
+  }, [retainedCandidates, saveRetainedCandidates]);
 
   // Scanner, quote, chart, fundamentals and news are independent stores.
   // Coalesce their updates so one burst only re-runs the candidate evaluator
@@ -129,8 +213,16 @@ export function RossCandidatesPanel({ stores, commands }: PanelProps): JSX.Eleme
 
   const evaluated = useMemo<EvaluatedCandidate[]>(() => {
     const asOfMs = Date.now();
-    return stores.scanner.momentumCandidates().map((candidate) => {
-      const symbol = candidate.symbol;
+    const liveCandidates = stores.scanner.momentumCandidates();
+    const liveBySymbol = new Map(liveCandidates.map((candidate) => [candidate.symbol, candidate]));
+    const retainedBySymbol = new Map(retainedCandidates.map((item) => [item.symbol, item]));
+    const symbols = new Set([...liveBySymbol.keys(), ...retainedBySymbol.keys()]);
+
+    return [...symbols].sort((a, b) => a.localeCompare(b)).map((symbol) => {
+      const liveCandidate = liveBySymbol.get(symbol);
+      const retained = retainedBySymbol.get(symbol) ?? null;
+      const candidate = liveCandidate ?? retained!.snapshot;
+      const currentlyDiscovered = liveCandidate !== undefined;
       const detail = stores.stockDetail.detailFor(symbol);
       const quote = stores.quote.get(symbol);
       const price = positive(quote?.last) ?? positive(candidate.last) ?? positive(detail?.price);
@@ -171,9 +263,49 @@ export function RossCandidatesPanel({ stores, commands }: PanelProps): JSX.Eleme
         // technical-breakout detector has not yet been integrated.
         catalyst: hasNewsCatalyst ? "fundamental" : "unknown",
       });
-      return { candidate, result };
+      return { candidate, result, retained, currentlyDiscovered };
     });
-  }, [revision, stores, historyBySymbol]);
+  }, [revision, stores, historyBySymbol, retainedCandidates]);
+
+  // An ELIGIBLE candidate is retained automatically. A previously retained
+  // candidate survives temporary PENDING states (for example stale or missing
+  // data), but is removed once a current scanner observation proves it REJECTED.
+  // Last-seen row details are persisted with the panel settings so a candidate
+  // remains visible after leaving all discovery boards and across app restarts.
+  useEffect(() => {
+    const nextBySymbol = new Map(retainedCandidates.map((item) => [item.symbol, item]));
+    let changed = false;
+    for (const item of evaluated) {
+      const existing = nextBySymbol.get(item.candidate.symbol);
+      if (existing) {
+        if (item.currentlyDiscovered && item.result.status === "REJECTED") {
+          nextBySymbol.delete(item.candidate.symbol);
+          changed = true;
+          continue;
+        }
+        if (item.currentlyDiscovered) {
+          const lastSeenAt = item.candidate.refreshedAt || existing.lastSeenAt;
+          if (lastSeenAt !== existing.lastSeenAt || JSON.stringify(existing.snapshot) !== JSON.stringify(item.candidate)) {
+            nextBySymbol.set(item.candidate.symbol, { ...existing, lastSeenAt, snapshot: item.candidate });
+            changed = true;
+          }
+        }
+      } else if (item.result.status === "ELIGIBLE" && nextBySymbol.size < MAX_RETAINED_CANDIDATES) {
+        const now = new Date().toISOString();
+        nextBySymbol.set(item.candidate.symbol, {
+          symbol: item.candidate.symbol,
+          retainedAt: now,
+          lastSeenAt: item.candidate.refreshedAt || now,
+          snapshot: item.candidate,
+        });
+        changed = true;
+      }
+    }
+    if (changed) {
+      const next = [...nextBySymbol.values()].sort((a, b) => Date.parse(b.retainedAt) - Date.parse(a.retainedAt));
+      saveRetainedCandidates(next);
+    }
+  }, [evaluated, retainedCandidates, saveRetainedCandidates]);
 
   const counts = useMemo(() => ({
     eligible: evaluated.filter((item) => item.result.status === "ELIGIBLE").length,
@@ -187,6 +319,7 @@ export function RossCandidatesPanel({ stores, commands }: PanelProps): JSX.Eleme
         <div style={{ fontWeight: 700, letterSpacing: ".04em" }}>ROSS MOMENTUM CANDIDATES</div>
         <div style={{ color: palette.textMuted, marginTop: 4, fontSize: 10 }}>
           Combined discovery from active Gainers, Most Active and Session Volume Scanner panels
+          <span style={{ marginLeft: 8, color: palette.text }}>· {retainedCandidates.length} retained</span>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 1, marginTop: 8, background: palette.border }}>
           {[
@@ -209,7 +342,7 @@ export function RossCandidatesPanel({ stores, commands }: PanelProps): JSX.Eleme
         </div>
       ) : (
         <div style={{ padding: "4px 8px 8px" }}>
-          {evaluated.map(({ candidate, result }) => (
+          {evaluated.map(({ candidate, result, retained, currentlyDiscovered }) => (
             <details key={candidate.symbol} style={{ borderBottom: "1px solid " + palette.border }}>
               <summary style={{ display: "grid", gridTemplateColumns: "minmax(70px, 1fr) minmax(50px, auto) minmax(50px, auto) auto", alignItems: "center", gap: 8, padding: "9px 3px", cursor: "pointer", listStylePosition: "inside" }}>
                 <span className="mono" style={{ fontWeight: 700, minWidth: 0 }}>{candidate.symbol}</span>
@@ -230,20 +363,54 @@ export function RossCandidatesPanel({ stores, commands }: PanelProps): JSX.Eleme
                       {modeLabel(mode)}
                     </span>
                   ))}
+                  <span style={{ border: "1px solid " + (retained ? palette.ok : palette.border), color: retained ? palette.ok : palette.textMuted, padding: "2px 5px", fontSize: 9 }}>
+                    {retained ? "RETAINED" : "DISCOVERY"}
+                  </span>
+                  {!currentlyDiscovered && (
+                    <span style={{ color: palette.accent, padding: "2px 0", fontSize: 9 }}>
+                      NOT IN CURRENT SCANNERS
+                    </span>
+                  )}
                 </div>
+                {retained && !currentlyDiscovered && (
+                  <div style={{ color: palette.textMuted, fontSize: 9, marginBottom: 7 }}>
+                    Last seen in a discovery scanner: {new Date(retained.lastSeenAt).toLocaleString()}
+                  </div>
+                )}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginBottom: 8 }}>
                   <div><div style={{ color: palette.textMuted, fontSize: 9 }}>Moomoo OS proxy</div><div className="mono">{shares(result.metrics.floatShares)}</div></div>
                   <div><div style={{ color: palette.textMuted, fontSize: 9 }}>1m candles</div><div className="mono">{historyBySymbol[candidate.symbol]?.oneMinuteBars.length ?? chartOneMinuteCount(stores, candidate.symbol)}</div></div>
                   <div><div style={{ color: palette.textMuted, fontSize: 9 }}>Daily candles</div><div className="mono">{historyBySymbol[candidate.symbol]?.dailyBars.length ?? chartDailyCount(stores, candidate.symbol)}</div></div>
                 </div>
-                <button
-                  type="button"
-                  disabled={historyLoading[candidate.symbol] === true}
-                  onClick={() => void loadArchivedHistory(candidate.symbol)}
-                  style={{ border: "1px solid " + palette.borderStrong, background: palette.surface, color: palette.text, padding: "5px 8px", fontSize: 10, cursor: historyLoading[candidate.symbol] ? "wait" : "pointer", opacity: historyLoading[candidate.symbol] ? 0.6 : 1, marginBottom: 8 }}
-                >
-                  {historyLoading[candidate.symbol] ? "Loading archived bars…" : historyBySymbol[candidate.symbol] ? "Refresh archived bars" : "Load archived bars"}
-                </button>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                  <button
+                    type="button"
+                    disabled={historyLoading[candidate.symbol] === true}
+                    onClick={() => void loadArchivedHistory(candidate.symbol)}
+                    style={{ border: "1px solid " + palette.borderStrong, background: palette.surface, color: palette.text, padding: "5px 8px", fontSize: 10, cursor: historyLoading[candidate.symbol] ? "wait" : "pointer", opacity: historyLoading[candidate.symbol] ? 0.6 : 1 }}
+                  >
+                    {historyLoading[candidate.symbol] ? "Loading archived bars…" : historyBySymbol[candidate.symbol] ? "Refresh archived bars" : "Load archived bars"}
+                  </button>
+                  {retained ? (
+                    <button
+                      type="button"
+                      onClick={() => removeRetainedCandidate(candidate.symbol)}
+                      style={{ border: "1px solid " + palette.borderStrong, background: palette.surface, color: palette.textMuted, padding: "5px 8px", fontSize: 10, cursor: "pointer" }}
+                    >
+                      Remove from shortlist
+                    </button>
+                  ) : result.status !== "REJECTED" ? (
+                    <button
+                      type="button"
+                      disabled={retainedCandidates.length >= MAX_RETAINED_CANDIDATES}
+                      onClick={() => keepCandidate(candidate)}
+                      title={retainedCandidates.length >= MAX_RETAINED_CANDIDATES ? "The shortlist is full. Remove a retained symbol first." : "Keep this candidate when it leaves the discovery scanners."}
+                      style={{ border: "1px solid " + palette.borderStrong, background: palette.surface, color: palette.text, padding: "5px 8px", fontSize: 10, cursor: retainedCandidates.length >= MAX_RETAINED_CANDIDATES ? "not-allowed" : "pointer", opacity: retainedCandidates.length >= MAX_RETAINED_CANDIDATES ? 0.5 : 1 }}
+                    >
+                      Keep on shortlist
+                    </button>
+                  ) : null}
+                </div>
                 {historyBySymbol[candidate.symbol]?.error && (
                   <div style={{ color: palette.accent, fontSize: 10, lineHeight: 1.4, marginBottom: 7 }}>
                     Archive notice: {historyBySymbol[candidate.symbol]!.error}
@@ -269,7 +436,7 @@ export function RossCandidatesPanel({ stores, commands }: PanelProps): JSX.Eleme
       )}
 
       <div style={{ padding: "8px 10px", borderTop: "1px solid " + palette.borderStrong, color: palette.textMuted, fontSize: 10, lineHeight: 1.45 }}>
-        Moomoo OutstandingShares remains an unverified proxy, so it cannot pass the free-float check. Expand a candidate and load its already-archived one-minute and daily bars on demand; this does not open a chart subscription. Nearby resistance and technical-breakout detection are not connected yet. This panel is informational and never places orders.
+        Candidates can be kept manually on this panel's persistent shortlist; fully ELIGIBLE candidates are retained automatically. Retained candidates remain through PENDING data states and are removed automatically only when a current scanner observation proves REJECTED. This is retention, not yet continuous live monitoring: fresh one-minute subscriptions are a separate next stage. Moomoo OutstandingShares remains an unverified proxy, and nearby resistance and technical-breakout detection are not connected. This panel is informational and never places orders.
       </div>
     </div>
   );

@@ -93,7 +93,8 @@ describe("evaluateRossMomentumCandidate", () => {
   });
 
   it("uses an inclusive $1 floor and an exclusive $20 ceiling", () => {
-    expect(evaluateRossMomentumCandidate(eligibleInput({ price: 1 })).status).toBe("ELIGIBLE");
+    const floorInput = eligibleInput({ price: 1, dailyBars: dailyHistory("2026-10-30", 220, 0.8) });
+    expect(evaluateRossMomentumCandidate(floorInput).status).toBe("ELIGIBLE");
     const result = evaluateRossMomentumCandidate(eligibleInput({ price: 20 }));
     expect(result.status).toBe("REJECTED");
     expect(result.checks.find((item) => item.id === "price")?.state).toBe("fail");

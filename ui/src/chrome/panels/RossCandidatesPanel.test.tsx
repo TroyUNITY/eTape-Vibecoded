@@ -109,4 +109,92 @@ describe("RossCandidatesPanel", () => {
     });
     expect(sendQuery).toHaveBeenCalledWith("QueryCandidateHistory", { symbol: "US.TEST" });
   });
+
+  it("persists a manually retained candidate after it leaves discovery scanners", async () => {
+    const stores = makeStores();
+    const config: PanelConfig = {
+      id: "p-ross-retention",
+      panelId: "ross-candidates",
+      group: null,
+      settings: {},
+    };
+    const onConfigChange = vi.fn();
+    const props = {
+      config,
+      stores,
+      scheduler: {} as never,
+      width: 500,
+      height: 300,
+      linkGroups: {} as never,
+      commands: {
+        sendCommand: async () => ({ status: "accepted" }),
+        sendQuery: async () => ({ symbol: "US.RETAINED", oneMinuteBars: [], dailyBars: [] }),
+      },
+      onConfigChange,
+    } as unknown as PanelProps;
+
+    render(<ThemeProvider><RossCandidatesPanel {...props} /></ThemeProvider>);
+
+    const payload: ScannerRankPayload = {
+      scannerId: "main/scanner-retention",
+      session: "rth",
+      refreshedAt: "2026-11-06T14:10:00.000Z",
+      discoveryAt: "2026-11-06T14:10:00.000Z",
+      status: "ready",
+      filters,
+      rows: [{
+        symbol: "US.RETAINED",
+        shortSellRestricted: false,
+        changePct: 8,
+        last: 4.5,
+        floatShares: 8_000_000,
+        volume: 500_000,
+        sessionVolume: 250_000,
+        turnover: null,
+        relativeVolume: 3,
+        shortInterest: null,
+        shortInterestAsOf: null,
+      }],
+    };
+    act(() => stores.scanner.apply({
+      kind: "snapshot",
+      topic: "scanner.rank",
+      key: "main/scanner-retention/rth",
+      payload,
+    }));
+
+    await waitFor(() => expect(screen.getByText("US.RETAINED")).toBeTruthy());
+    fireEvent.click(screen.getByText("US.RETAINED"));
+    fireEvent.click(screen.getByRole("button", { name: "Keep on shortlist" }));
+    await waitFor(() => {
+      expect(onConfigChange).toHaveBeenCalled();
+      expect(screen.getByText("RETAINED")).toBeTruthy();
+    });
+
+    const lastPatch = onConfigChange.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    const savedRecords = lastPatch.rossRetainedCandidates as unknown[];
+    expect(savedRecords).toHaveLength(1);
+
+    act(() => stores.scanner.apply({
+      kind: "delta",
+      topic: "scanner.rank",
+      key: "main/scanner-retention/rth",
+      payload: { ...payload, refreshedAt: "2026-11-06T14:11:00.000Z", rows: [] },
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByText("US.RETAINED")).toBeTruthy();
+      expect(screen.getByText("NOT IN CURRENT SCANNERS")).toBeTruthy();
+    });
+
+    cleanup();
+    const restoredConfig: PanelConfig = {
+      ...config,
+      settings: { rossRetainedCandidates: savedRecords },
+    };
+    render(<ThemeProvider><RossCandidatesPanel {...{ ...props, config: restoredConfig }} /></ThemeProvider>);
+    expect(screen.getByText("US.RETAINED")).toBeTruthy();
+    fireEvent.click(screen.getByText("US.RETAINED"));
+    expect(screen.getByText("NOT IN CURRENT SCANNERS")).toBeTruthy();
+  });
 });
