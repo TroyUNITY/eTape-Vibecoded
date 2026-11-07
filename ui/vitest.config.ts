@@ -112,6 +112,7 @@ export default defineConfig({
           name: 'strategy',
           include: [
             'src/strategy/candidateEligibility.test.ts',
+            'src/strategy/candidateTechnicalAnalysis.test.ts',
             'src/chrome/panels/RossCandidatesPanel.test.tsx',
           ],
         },

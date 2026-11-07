@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -123,6 +124,11 @@ type Core struct {
 	startingBalance        map[VenueID]float64
 	recoverSnapshotTimeout time.Duration
 
+	// pendingSubmits keeps follow-up broker actions behind an in-flight submit.
+	// A kill-switch cancel must not overtake the venue POST that creates the order.
+	pendingSubmitMu sync.Mutex
+	pendingSubmits  map[string]chan struct{}
+
 	cmds    chan cmdReq
 	bevents chan BrokerEvent
 	markCh  chan Mark
@@ -203,6 +209,7 @@ func NewCore(cfg CoreConfig) *Core {
 		syslog:                 sl,
 		startingBalance:        cfg.StartingBalance,
 		recoverSnapshotTimeout: recoverSnapshotTimeout,
+		pendingSubmits:         make(map[string]chan struct{}),
 		cmds:                   make(chan cmdReq),
 		bevents:                make(chan BrokerEvent, 1024),
 		markCh:                 make(chan Mark, 256),
@@ -1128,8 +1135,47 @@ func (c *Core) handleSubmit(ctx context.Context, cm SubmitOrder) CmdAck {
 	if err := c.appendAndFold(OrderSubmitted{Order: o}, SrcLocal); err != nil {
 		return CmdAck{Accepted: false, Reason: "event append failed: " + err.Error(), OrderID: req.ClientOrderID}
 	}
-	go c.postSubmit(ctx, b, req, guarded)
+	pending := c.beginPendingSubmit(req.ClientOrderID)
+	go func() {
+		defer c.finishPendingSubmit(req.ClientOrderID, pending)
+		c.postSubmit(ctx, b, req, guarded)
+	}()
 	return CmdAck{Accepted: true, OrderID: req.ClientOrderID}
+}
+
+// beginPendingSubmit records an in-flight venue submission before its goroutine
+// starts. This lets a concurrent cancel/replace wait until the broker has
+// finished creating the order, rather than racing the submit request.
+func (c *Core) beginPendingSubmit(orderID string) chan struct{} {
+	done := make(chan struct{})
+	c.pendingSubmitMu.Lock()
+	c.pendingSubmits[orderID] = done
+	c.pendingSubmitMu.Unlock()
+	return done
+}
+
+func (c *Core) finishPendingSubmit(orderID string, done chan struct{}) {
+	c.pendingSubmitMu.Lock()
+	if c.pendingSubmits[orderID] == done {
+		delete(c.pendingSubmits, orderID)
+	}
+	close(done)
+	c.pendingSubmitMu.Unlock()
+}
+
+func (c *Core) waitForPendingSubmit(ctx context.Context, orderID string) bool {
+	c.pendingSubmitMu.Lock()
+	done := c.pendingSubmits[orderID]
+	c.pendingSubmitMu.Unlock()
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func newOrderFromRequest(req OrderRequest, now int64) Order {
@@ -1360,6 +1406,13 @@ func (c *Core) handleReplaceSingle(ctx context.Context, cm ReplaceOrder) CmdAck 
 
 func (c *Core) startVenueAction(ctx context.Context, b Broker, venue VenueID, orderID string, kind OrderActionKind, req ReplaceRequest) {
 	go func() {
+		// In particular, a kill-switch cancel can be requested while SubmitOrder
+		// is still in flight. Wait for that broker call to finish before sending
+		// the follow-up action, or the broker may see CancelOrder before it knows
+		// the order exists.
+		if !c.waitForPendingSubmit(ctx, orderID) {
+			return
+		}
 		var err error
 		if kind == ActionCancel {
 			err = b.CancelOrder(ctx, orderID)

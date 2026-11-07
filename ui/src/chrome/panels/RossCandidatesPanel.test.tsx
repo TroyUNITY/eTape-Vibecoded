@@ -106,6 +106,9 @@ describe("RossCandidatesPanel", () => {
       expect(screen.getByRole("button", { name: "Refresh archived bars" })).toBeTruthy();
       expect(screen.getByText("1m candles").nextElementSibling?.textContent).toBe("1");
       expect(screen.getAllByText("PENDING").length).toBeGreaterThan(0);
+      expect(screen.getByText("TECHNICAL ANALYSIS")).toBeTruthy();
+      expect(screen.getByText("NEAREST OVERHEAD RESISTANCE")).toBeTruthy();
+      expect(screen.getByText("INTRADAY BREAKOUT")).toBeTruthy();
     });
     expect(sendQuery).toHaveBeenCalledWith("QueryCandidateHistory", { symbol: "US.TEST" });
   });

@@ -33,6 +33,115 @@ func armBoth(t *testing.T, c *exec.Core, _ exec.VenueID) {
 	}
 }
 
+type gatedSubmitBroker struct {
+	*sim.Broker
+	submitStarted chan struct{}
+	releaseSubmit chan struct{}
+	cancelStarted chan struct{}
+}
+
+func (b *gatedSubmitBroker) SubmitOrder(ctx context.Context, req exec.OrderRequest) (exec.OrderAck, error) {
+	close(b.submitStarted)
+	select {
+	case <-b.releaseSubmit:
+	case <-ctx.Done():
+		return exec.OrderAck{}, ctx.Err()
+	}
+	return b.Broker.SubmitOrder(ctx, req)
+}
+
+func (b *gatedSubmitBroker) CancelOrder(ctx context.Context, orderID string) error {
+	select {
+	case b.cancelStarted <- struct{}{}:
+	default:
+	}
+	return b.Broker.CancelOrder(ctx, orderID)
+}
+
+// Kill may be pressed while the broker's SubmitOrder call is still running.
+// The cancel must wait for that call to finish, otherwise it can reach the
+// venue before the order exists and leave the order working after a kill.
+func TestCoreKillSwitchWaitsForPendingSubmitBeforeCancel(t *testing.T) {
+	clk := clock.NewFake(time.UnixMilli(1_700_000_000_000))
+	st, err := store.Open(store.Options{Path: filepath.Join(t.TempDir(), "kill-pending-submit.db"), Clock: clk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	base := sim.New("sim-1", clk, 100_000, sim.Options{})
+	base.SetMark("AAPL", 100)
+	broker := &gatedSubmitBroker{
+		Broker:        base,
+		submitStarted: make(chan struct{}),
+		releaseSubmit: make(chan struct{}),
+		cancelStarted: make(chan struct{}, 1),
+	}
+	cfg := exec.CoreConfig{
+		Venues: []exec.VenueID{"sim-1"},
+		Gate: exec.GateConfig{
+			Global: exec.GlobalLimits{MaxDayLoss: 1000, MaxSymbolPositionShares: 1000, MaxSymbolPositionValue: 1_000_000},
+			Venue: map[exec.VenueID]exec.VenueLimits{
+				"sim-1": {MaxOrderValue: 100000, MaxPositionValue: 1_000_000, MaxPositionShares: 1000, MaxOpenOrders: 10},
+			},
+		},
+		Store: st, Brokers: map[exec.VenueID]exec.Broker{"sim-1": broker}, Clock: clk,
+		IDGen: exec.NewOrderIDGen(clk, rand.New(rand.NewSource(7))),
+	}
+	c := exec.NewCore(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := c.Recover(ctx); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); _ = c.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	if ack := c.Do(exec.Arm{}); !ack.Accepted {
+		t.Fatalf("arm: %+v", ack)
+	}
+	submit := c.Do(exec.SubmitOrder{
+		Venue: "sim-1", Symbol: "AAPL", Side: exec.SideBuy,
+		Type: exec.TypeLimit, TIF: exec.TIFDay, Qty: 1, LimitPrice: 90,
+	})
+	if !submit.Accepted {
+		t.Fatalf("submit: %+v", submit)
+	}
+	select {
+	case <-broker.submitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("broker SubmitOrder did not start")
+	}
+
+	if ack := c.Do(exec.KillSwitch{}); !ack.Accepted {
+		t.Fatalf("kill switch: %+v", ack)
+	}
+	select {
+	case <-broker.cancelStarted:
+		t.Fatal("CancelOrder reached the broker before SubmitOrder finished")
+	case <-time.After(30 * time.Millisecond):
+		// The cancel should be waiting behind the pending submit.
+	}
+
+	close(broker.releaseSubmit)
+	update := waitFor(t, c, func(u exec.Update) bool {
+		order, ok := u.(exec.OrderUpdate)
+		return ok && order.Order.ID == submit.OrderID && order.Order.Status == exec.StatusCanceled
+	}).(exec.OrderUpdate)
+	if update.Order.Working() {
+		t.Fatalf("kill left the order working: %+v", update.Order)
+	}
+	select {
+	case <-broker.cancelStarted:
+	default:
+		t.Fatal("expected the queued cancellation to reach the broker after submit completed")
+	}
+}
+
 func TestCoreCancelRestingOrder(t *testing.T) {
 	c, sims, _ := newTestCore(t, "sim-1")
 	sims["sim-1"].SetMark("AAPL", 100)

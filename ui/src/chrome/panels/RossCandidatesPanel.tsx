@@ -3,6 +3,7 @@ import type { PanelProps } from "./registry";
 import { useTheme } from "../ThemeProvider";
 import type { Palette } from "../../render/palette";
 import { evaluateRossMomentumCandidate, type CandidateEligibilityResult } from "../../strategy/candidateEligibility";
+import { analyzeCandidateTechnicalContext, type CandidateTechnicalAnalysis } from "../../strategy/candidateTechnicalAnalysis";
 import type { MomentumScannerCandidate } from "../../data/ScannerStore";
 import type { Bar, QueryCandidateHistoryResult } from "../../wire/contract";
 import { MAX_CANDIDATE_MONITOR_SYMBOLS } from "../../wire/DemandRegistry";
@@ -20,6 +21,7 @@ interface RetainedCandidateRecord {
 interface EvaluatedCandidate {
   candidate: MomentumScannerCandidate;
   result: CandidateEligibilityResult;
+  technical: CandidateTechnicalAnalysis;
   retained: RetainedCandidateRecord | null;
   currentlyDiscovered: boolean;
   liveMonitoringRequested: boolean;
@@ -369,6 +371,12 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
       const hasNewsCatalyst = stores.news.itemsFor(symbol).some(
         (item) => item.catalyst_score >= 50 && item.catalyst_category !== "other",
       );
+      const technical = analyzeCandidateTechnicalContext({
+        price,
+        oneMinuteBars,
+        dailyBars,
+        asOfMs,
+      });
 
       const result = evaluateRossMomentumCandidate({
         symbol,
@@ -379,16 +387,17 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
         oneMinuteBars,
         asOfMs,
         dailyBars,
-        // The source material does not define a numeric proximity threshold.
-        // Keep this unknown until a defensible resistance assessment exists.
-        dailyChart: { nearbyResistance: null },
-        // No qualifying headline is not proof that no catalyst exists; a
-        // technical-breakout detector has not yet been integrated.
-        catalyst: hasNewsCatalyst ? "fundamental" : "unknown",
+        dailyChart: { nearbyResistance: technical.resistance.nearby },
+        // A confirmed breakout can substitute for a fundamental headline.
+        // No detected headline is not proof that no fundamental catalyst exists.
+        catalyst: hasNewsCatalyst
+          ? "fundamental"
+          : technical.breakout.detected === true ? "technical_breakout" : "unknown",
       });
       return {
         candidate,
         result,
+        technical,
         retained,
         currentlyDiscovered,
         liveMonitoringRequested: liveMonitorSymbols.includes(symbol),
@@ -472,7 +481,7 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
         </div>
       ) : (
         <div style={{ padding: "4px 8px 8px" }}>
-          {evaluated.map(({ candidate, result, retained, currentlyDiscovered, liveMonitoringRequested }) => (
+          {evaluated.map(({ candidate, result, technical, retained, currentlyDiscovered, liveMonitoringRequested }) => (
             <details key={candidate.symbol} style={{ borderBottom: "1px solid " + palette.border }}>
               <summary style={{ display: "grid", gridTemplateColumns: "minmax(70px, 1fr) minmax(50px, auto) minmax(50px, auto) auto", alignItems: "center", gap: 8, padding: "9px 3px", cursor: "pointer", listStylePosition: "inside" }}>
                 <span className="mono" style={{ fontWeight: 700, minWidth: 0 }}>{candidate.symbol}</span>
@@ -588,6 +597,25 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
                       : "The live-monitor demand is requested, but fresh one-minute data has not arrived yet. The freshness check remains unknown until it does."}
                   </div>
                 )}
+                <div style={{ color: palette.textMuted, fontSize: 9, letterSpacing: ".05em", marginBottom: 3 }}>TECHNICAL ANALYSIS</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginBottom: 9 }}>
+                  <div style={{ border: "1px solid " + palette.border, padding: 7 }}>
+                    <div style={{ color: palette.textMuted, fontSize: 9, marginBottom: 3 }}>NEAREST OVERHEAD RESISTANCE</div>
+                    <div className="mono" style={{ fontSize: 11, marginBottom: 3 }}>
+                      {technical.resistance.levelPrice === null
+                        ? technical.resistance.nearby === false ? "NONE ABOVE PRICE" : "UNKNOWN"
+                        : money(technical.resistance.levelPrice) + (technical.resistance.distancePct === null ? "" : " · " + technical.resistance.distancePct.toFixed(2) + "%")}
+                    </div>
+                    <div style={{ color: palette.textMuted, fontSize: 9, lineHeight: 1.35 }}>{technical.resistance.detail}</div>
+                  </div>
+                  <div style={{ border: "1px solid " + palette.border, padding: 7 }}>
+                    <div style={{ color: palette.textMuted, fontSize: 9, marginBottom: 3 }}>INTRADAY BREAKOUT</div>
+                    <div className="mono" style={{ fontSize: 11, marginBottom: 3 }}>
+                      {technical.breakout.detected === null ? "UNKNOWN" : technical.breakout.detected ? "CONFIRMED" : "NOT CONFIRMED"}
+                    </div>
+                    <div style={{ color: palette.textMuted, fontSize: 9, lineHeight: 1.35 }}>{technical.breakout.detail}</div>
+                  </div>
+                </div>
                 <div style={{ color: palette.textMuted, fontSize: 9, letterSpacing: ".05em", marginBottom: 3 }}>ELIGIBILITY CHECKS</div>
                 {result.checks.map((check) => (
                   <div key={check.id} style={{ display: "grid", gridTemplateColumns: "minmax(110px, .7fr) minmax(0, 1.5fr) auto", gap: 7, padding: "4px 0", borderTop: "1px solid " + palette.border, alignItems: "start" }}>
@@ -608,7 +636,7 @@ export function RossCandidatesPanel({ config, stores, commands, onConfigChange, 
       )}
 
       <div style={{ padding: "8px 10px", borderTop: "1px solid " + palette.borderStrong, color: palette.textMuted, fontSize: 10, lineHeight: 1.45 }}>
-        Retained candidates persist independently of scanner rankings. You can request live one-minute monitoring for up to {MAX_CANDIDATE_MONITOR_SYMBOLS} retained US symbols; requests use the engine's shared quota-aware demand manager and are released when stopped or when this panel closes. "LIVE 1M FRESH" means a recent minute bar has actually arrived; accepted requests without fresh data remain unknown/PENDING for the freshness criterion. Archived and live candles are merged with live updates taking precedence. Moomoo OutstandingShares remains an unverified proxy, and nearby resistance and technical-breakout detection are not connected. This panel is informational and never places orders.
+        Retained candidates persist independently of scanner rankings. You can request live one-minute monitoring for up to {MAX_CANDIDATE_MONITOR_SYMBOLS} retained US symbols; requests use the engine's shared quota-aware demand manager and are released when stopped or when this panel closes. "LIVE 1M FRESH" means a recent minute bar has actually arrived; accepted requests without fresh data remain unknown/PENDING for the freshness criterion. Archived and live candles are merged with live updates taking precedence. Resistance analysis uses completed daily swing highs and the prior 20-day high; levels within 3% are treated as nearby. A technical breakout requires a completed one-minute close above the prior 20 one-minute highs with at least 2x their average volume. These numeric thresholds are eTape heuristics, not thresholds prescribed by Ross Cameron. Moomoo OutstandingShares remains an unverified proxy. This panel is informational and never places orders.
       </div>
     </div>
   );
