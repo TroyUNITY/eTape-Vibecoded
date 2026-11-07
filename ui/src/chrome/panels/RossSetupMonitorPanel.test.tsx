@@ -197,7 +197,7 @@ describe("RossSetupMonitorPanel", () => {
           bid: 123.4,
           ask: 123.5,
           last: 123.45,
-          ts: new Date(now).toISOString(),
+          ts: new Date(now - 1_000).toISOString(),
         },
       } as never);
       applyBar(view.stores, "10s", new Date(now - 5_000).toISOString(), { v: 250, inProgress: true, gap: true });
