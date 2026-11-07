@@ -7,9 +7,8 @@ import { MAX_STRATEGY_MONITOR_SYMBOLS } from "../../wire/DemandRegistry";
 
 const WATCHED_SYMBOLS_SETTING = "rossSetupMonitorSymbols";
 const FRESH_QUOTE_MS = 15_000;
-const FRESH_ONE_MINUTE_BAR_MS = 90_000;
 
-type MonitorDemandState = "requesting" | "subscribed" | "blocked" | "error";
+type MonitorDemandState = "requesting" | "accepted" | "blocked" | "error";
 
 function normalizeUsTicker(value: string): string | null {
   const raw = value.trim().toUpperCase();
@@ -94,14 +93,16 @@ export function RossSetupMonitorPanel({ config, stores, onConfigChange, demandRe
     void demandRegistry.ensure(id, symbol, "strategy").then((ack) => {
       if (!activeDemandIds.current.has(id)) return;
       if (ack.status === "accepted") {
+        // EnsureSymbol acknowledges the engine demand, not the provider's
+        // asynchronous Qot_Sub admission. Actual feed arrival is shown below.
         setDemandStates((current) => ({
           ...current,
-          [symbol]: { state: "subscribed", detail: null },
+          [symbol]: { state: "accepted", detail: null },
         }));
       } else {
         setDemandStates((current) => ({
           ...current,
-          [symbol]: { state: "blocked", detail: ack.reason ?? "The market-data request was not accepted." },
+          [symbol]: { state: "blocked", detail: ack.reason ?? "The market-data demand was not accepted." },
         }));
       }
     }).catch((error: unknown) => {
@@ -142,8 +143,8 @@ export function RossSetupMonitorPanel({ config, stores, onConfigChange, demandRe
     activeDemandIds.current.clear();
   }, [demandRegistry]);
 
-  // Quotes and bars drive the display. The two-second heartbeat only ages the
-  // freshness labels; it does not poll the provider or repeat market requests.
+  // Market-data stores drive each row. The two-second heartbeat only refreshes
+  // timestamp labels; it never polls the provider or repeats market requests.
   useEffect(() => {
     const refresh = () => setNow(Date.now());
     const off = [
@@ -191,13 +192,15 @@ export function RossSetupMonitorPanel({ config, stores, onConfigChange, demandRe
     fontWeight: 600,
   };
   const cell = { padding: "8px", borderTop: "1px solid " + palette.border, verticalAlign: "middle" as const };
+  const detail = { color: palette.textMuted, fontSize: 9, lineHeight: 1.5 };
+  const lineLabel = { color: palette.textMuted, fontSize: 9, fontWeight: 700 as const, letterSpacing: ".03em" };
 
   return (
     <div style={{ height: "100%", minHeight: 0, overflow: "auto", background: palette.bg, color: palette.text, fontSize: 12 }}>
       <div style={{ padding: "9px 10px", borderBottom: "1px solid " + palette.borderStrong }}>
         <div style={{ fontWeight: 700, letterSpacing: ".04em" }}>ROSS SETUP MONITOR</div>
         <div style={{ color: palette.textMuted, marginTop: 4, fontSize: 10 }}>
-          Manually selected US stocks · live quotes and one-minute candles
+          Manually selected US stocks · quotes, prints and 1m / derived 5m candles
           <span style={{ marginLeft: 8, color: palette.accent }}>· {symbols.length}/{MAX_STRATEGY_MONITOR_SYMBOLS} monitored</span>
         </div>
       </div>
@@ -250,54 +253,55 @@ export function RossSetupMonitorPanel({ config, stores, onConfigChange, demandRe
       {symbols.length === 0 ? (
         <div style={{ padding: 18, color: palette.textMuted, lineHeight: 1.6, textAlign: "center" }}>
           <div style={{ color: palette.text, fontWeight: 600, marginBottom: 5 }}>No stocks selected</div>
-          Enter symbols you have identified in EdgeTick. eTape will subscribe to their live quotes and one-minute candles.
+          Enter symbols you have identified in EdgeTick. eTape will request live quotes, trade prints and one-minute candles.
         </div>
       ) : (
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
-              <th style={th}>SYMBOL</th>
+              <th style={th}>SYMBOL / DEMAND</th>
               <th style={{ ...th, textAlign: "right" }}>LAST</th>
-              <th style={th}>MARKET DATA</th>
-              <th style={th}>1M BAR</th>
+              <th style={th}>QUOTE / 10S PRINTS</th>
+              <th style={th}>1M / 5M CANDLES</th>
               <th style={th}></th>
             </tr>
           </thead>
           <tbody>
             {symbols.map((symbol) => {
               const quote = stores.quote.get(symbol);
-              const latestBar = stores.bars.latestBar(symbol, "1m");
+              const latest10s = stores.bars.latestBar(symbol, "10s");
+              const latest1m = stores.bars.latestBar(symbol, "1m");
+              const latest5m = stores.bars.latestBar(symbol, "5m");
               const quoteAge = ageMs(quote?.ts, now);
-              const barAge = ageMs(latestBar?.bucketStart, now);
-              const freshQuote = quoteAge !== null && quoteAge <= FRESH_QUOTE_MS;
-              const freshBar = barAge !== null && barAge <= FRESH_ONE_MINUTE_BAR_MS;
-              const live = freshQuote || freshBar;
-              const price = quote && quote.last > 0 ? quote.last : latestBar?.c ?? null;
+              const tickBucketAge = ageMs(latest10s?.bucketStart, now);
+              const quoteFresh = quoteAge !== null && quoteAge <= FRESH_QUOTE_MS;
+              const price = quote && quote.last > 0 ? quote.last : null;
               const demand = demandStates[symbol];
               const demandState = demand?.state ?? "requesting";
-              const statusLabel = live ? "LIVE DATA"
-                : demandState === "requesting" ? "REQUESTING"
-                  : demandState === "blocked" ? "BLOCKED"
-                    : demandState === "error" ? "ERROR"
-                      : "WAITING FOR DATA";
-              const statusColor = live ? palette.ok
-                : demandState === "blocked" || demandState === "error" ? palette.danger
-                  : demandState === "requesting" ? palette.accent : palette.textMuted;
-              const lastUpdateAge = [quoteAge, barAge].filter((value): value is number => value !== null)
-                .reduce<number | null>((best, value) => best === null ? value : Math.min(best, value), null);
+              const demandLabel = demandState === "accepted" ? "ENGINE ACCEPTED"
+                : demandState === "blocked" ? "BLOCKED"
+                  : demandState === "error" ? "ERROR" : "REQUESTING";
+              const demandColor = demandState === "blocked" || demandState === "error"
+                ? palette.danger : demandState === "requesting" ? palette.accent : palette.textMuted;
+
+              const renderCandle = (bar: typeof latest1m, timeframe: string) => (
+                <div>
+                  <div style={lineLabel}>{timeframe} · {bar?.inProgress ? "FORMING" : "CLOSED"}</div>
+                  {bar ? (
+                    <div style={detail}>
+                      C {formatPrice(bar.c, quoteDecimals(bar.c, 2))} · {formatCompactShares(bar.v)} vol
+                      <div>Bucket started {ageLabel(ageMs(bar.bucketStart, now))}</div>
+                    </div>
+                  ) : <div style={detail}>No {timeframe} candle yet</div>}
+                </div>
+              );
 
               return (
                 <tr key={symbol}>
-                  <td style={{ ...cell, fontFamily: "monospace", fontWeight: 700 }}>{bareSymbol(symbol)}</td>
-                  <td className="mono" style={{ ...cell, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                    {price === null ? "—" : formatPrice(price, quoteDecimals(price, 2))}
-                  </td>
-                  <td style={{ ...cell, minWidth: 118 }}>
-                    <div className="mono" style={{ color: statusColor, fontSize: 9, fontWeight: 700 }}>{statusLabel}</div>
-                    <div style={{ color: palette.textMuted, fontSize: 9, marginTop: 3 }}>
-                      {live ? "Updated " + ageLabel(lastUpdateAge)
-                        : demand?.detail ?? (demandState === "subscribed" ? "Waiting for first quote or candle." : "Requesting subscription.")}
-                    </div>
+                  <td style={{ ...cell, minWidth: 86 }}>
+                    <div style={{ fontFamily: "monospace", fontWeight: 700 }}>{bareSymbol(symbol)}</div>
+                    <div className="mono" style={{ color: demandColor, fontSize: 8, fontWeight: 700, marginTop: 3 }}>{demandLabel}</div>
+                    {demand?.detail && <div style={{ ...detail, color: palette.danger }}>{demand.detail}</div>}
                     {(demandState === "blocked" || demandState === "error") && (
                       <button
                         type="button"
@@ -308,10 +312,29 @@ export function RossSetupMonitorPanel({ config, stores, onConfigChange, demandRe
                       </button>
                     )}
                   </td>
-                  <td style={{ ...cell, color: palette.textMuted, fontSize: 10 }}>
-                    {latestBar
-                      ? formatCompactShares(latestBar.v) + " vol · " + ageLabel(barAge)
-                      : "Waiting"}
+                  <td className="mono" style={{ ...cell, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                    {price === null ? "—" : formatPrice(price, quoteDecimals(price, 2))}
+                  </td>
+                  <td style={{ ...cell, minWidth: 132 }}>
+                    <div>
+                      <div style={{ ...lineLabel, color: quoteFresh ? palette.ok : palette.textMuted }}>
+                        QUOTE · {quoteAge === null ? (quote ? "TIME UNKNOWN" : "NO DATA") : quoteFresh ? "FRESH" : "STALE"}
+                      </div>
+                      <div style={detail}>{quote ? "Provider timestamp " + ageLabel(quoteAge) : "Waiting for quote"}</div>
+                    </div>
+                    <div style={{ marginTop: 6 }}>
+                      <div style={lineLabel}>10S PRINTS{latest10s?.gap ? " · GAP" : ""}</div>
+                      {latest10s ? (
+                        <div style={detail}>
+                          {formatCompactShares(latest10s.v)} vol · bucket {ageLabel(tickBucketAge)}
+                          {latest10s.volumeOnly ? " · volume only" : ""}
+                        </div>
+                      ) : <div style={detail}>Waiting for trade prints</div>}
+                    </div>
+                  </td>
+                  <td style={{ ...cell, minWidth: 144 }}>
+                    {renderCandle(latest1m, "1M")}
+                    <div style={{ marginTop: 6 }}>{renderCandle(latest5m, "5M")}</div>
                   </td>
                   <td style={{ ...cell, textAlign: "right" }}>
                     <button
@@ -332,7 +355,7 @@ export function RossSetupMonitorPanel({ config, stores, onConfigChange, demandRe
       )}
 
       <div style={{ padding: "8px 10px", borderTop: "1px solid " + palette.borderStrong, color: palette.textMuted, fontSize: 10, lineHeight: 1.45 }}>
-        Your manual symbol list is saved with this workspace. eTape requests live quotes, trade prints and one-minute candles for these symbols, and releases their subscriptions when they are removed or this panel closes. The two-second refresh only updates data-freshness labels; it does not poll the provider. Setup detection and trade plans will be added in the next stages. This panel is informational and never places orders.
+        The engine accepts each monitoring demand before OpenD finishes subscription admission, so “ENGINE ACCEPTED” is not proof of a live provider stream. Quote freshness uses the provider quote timestamp. The 10-second series is derived from Ticker trade prints; 1-minute candles come from K_1M, and 5-minute candles are aggregated from those 1-minute bars. Candle age is shown as bucket age, not as a last-update timestamp. Forming candles remain open until later market data proves the bucket has completed. The two-second refresh only updates display ages; it does not poll the provider. This panel is informational and never places orders.
       </div>
     </div>
   );
