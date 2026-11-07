@@ -30,7 +30,9 @@ No external data provider, API key, new scanner subscription, Trade Guard behavi
 
 - Panel tests cover manual retention, persistence through the panel settings patch, and continued visibility after the candidate leaves discovery scanners.
 - Existing Stage 2.1 eligibility and Stage 2.2 scanner aggregation/history tests remain part of the strategy Vitest project.
-- CI must still complete the UI strategy tests, full test suite, lint/build, engine tests, Go lint, and TypeScript contract drift checks. Known unrelated LadderPanel timeout and existing Go formatting lint issue are tracked separately from this feature.
+- CI must still complete the UI strategy tests, full test suite, lint/build, engine tests, Go lint, and TypeScript contract drift checks. The price-floor test uses daily candles consistent with the tested $1 price so it isolates the price boundary rather than failing the separate daily-trend check.
+- The Windows CI job refreshes the Tape golden PNGs for the previously intentional brighter text styling and commits the updated references; strict pixel comparisons remain enabled.
+- Tape-format tests now match the existing display rule: two decimals for prices at or above $1, and four decimals below $1.
 
 ## Operator checks
 

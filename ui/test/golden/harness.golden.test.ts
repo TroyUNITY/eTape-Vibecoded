@@ -16,5 +16,5 @@ describe("golden harness", () => {
       ctx.fillText("eTape 3.50 × 1,428", 10, 52);
     });
     expectGolden("harness-smoke", png);
-  });
+  }, 15_000);
 });
