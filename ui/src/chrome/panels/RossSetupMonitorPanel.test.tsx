@@ -152,6 +152,28 @@ describe("RossSetupMonitorPanel", () => {
     expect(demandRegistry.release).toHaveBeenCalledWith("ross-setup-monitor:p-ross:US.AAPL");
   });
 
+  it("migrates symbols that were already explicitly live-monitored by the old panel", async () => {
+    const demandRegistry = makeDemandRegistry();
+    renderMonitor({
+      settings: { rossLiveMonitorSymbols: ["US.CDT", "US.VSA", "US.CDT"] },
+      demandRegistry,
+    });
+
+    expect(screen.getByText("2/5 monitored")).toBeTruthy();
+    await waitFor(() => {
+      expect(demandRegistry.ensure).toHaveBeenCalledWith(
+        "ross-setup-monitor:p-ross:US.CDT",
+        "US.CDT",
+        "strategy",
+      );
+      expect(demandRegistry.ensure).toHaveBeenCalledWith(
+        "ross-setup-monitor:p-ross:US.VSA",
+        "US.VSA",
+        "strategy",
+      );
+    });
+  });
+
   it("restores at most five valid, unique symbols from panel settings", async () => {
     const demandRegistry = makeDemandRegistry();
     renderMonitor({
