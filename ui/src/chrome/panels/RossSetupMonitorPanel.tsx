@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { PanelProps } from "./registry";
 import { useTheme } from "../ThemeProvider";
 import { formatPrice, quoteDecimals } from "../../render/format";
@@ -153,7 +153,7 @@ export function RossSetupMonitorPanel({ config, stores, onConfigChange, demandRe
     };
   }, [stores]);
 
-  const addSymbol = (event: React.FormEvent<HTMLFormElement>) => {
+  const addSymbol = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const symbol = normalizeUsTicker(addValue);
     if (!symbol) {
