@@ -12,7 +12,7 @@ import { ChartPanel } from "./ChartPanel";
 import { LadderPanel } from "./LadderPanel";
 import { TapePanel } from "./TapePanel";
 import { ScannerPanel } from "./ScannerPanel";
-import { RossCandidatesPanel } from "./RossCandidatesPanel";
+import { RossSetupMonitorPanel } from "./RossSetupMonitorPanel";
 import { WatchlistPanel } from "./WatchlistPanel";
 import { StockInfoPanel } from "./StockInfoPanel";
 import { TradeGuardPanel } from "./TradeGuardPanel";
@@ -169,11 +169,11 @@ export const PANELS: Record<string, PanelDef> = {
     headerControls: true,
   },
   "ross-candidates": {
-    component: RossCandidatesPanel,
-    topics: ["scanner.rank", "md.quote", "md.bars", "stock.detail", "news.item"],
-    title: "Ross Candidates",
+    component: RossSetupMonitorPanel,
+    topics: ["md.quote", "md.bars"],
+    title: "Ross Setup Monitor",
     glyph: "RC",
-    description: "Combined momentum candidate eligibility",
+    description: "Manually selected symbols and live Ross setup monitoring",
     symbolBearing: false,
   },
   "watchlist": {
