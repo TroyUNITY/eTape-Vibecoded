@@ -24,6 +24,22 @@ func TestDemandProfiles(t *testing.T) {
 	}
 }
 
+func TestRossSetupMonitorDemandIsLiveDataOnlyAndBackgroundSeeded(t *testing.T) {
+	d := RossSetupMonitorDemand("ross-monitor:AAPL", "US.AAPL")
+	want := []SubType{SubQuote, SubTicker, SubKL1m}
+	if len(d.Subs) != len(want) {
+		t.Fatalf("Ross monitor subscriptions = %v, want %v", d.Subs, want)
+	}
+	for i := range want {
+		if d.Subs[i] != want[i] {
+			t.Fatalf("Ross monitor subscriptions = %v, want %v", d.Subs, want)
+		}
+	}
+	if d.Focused || d.Background || !d.BackgroundSeed || !d.WantsHistory || d.CachedDaily {
+		t.Fatalf("Ross monitor demand = %+v; want ordinary unpinned demand with background cache seed and archive warm", d)
+	}
+}
+
 // Compile-time exhaustiveness: every event type is part of the union.
 var _ = []Event{
 	TicksEvent{}, QuoteEvent{}, BookEvent{}, Bars1mEvent{},
