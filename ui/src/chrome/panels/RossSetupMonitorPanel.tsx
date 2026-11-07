@@ -90,6 +90,7 @@ export function RossSetupMonitorPanel({ config, stores, onConfigChange, demandRe
     }));
 
     void demandRegistry.ensure(id, symbol, "strategy").then((ack) => {
+      if (!activeDemandIds.current.has(id)) return;
       if (ack.status === "accepted") {
         setDemandStates((current) => ({
           ...current,
@@ -102,6 +103,7 @@ export function RossSetupMonitorPanel({ config, stores, onConfigChange, demandRe
         }));
       }
     }).catch((error: unknown) => {
+      if (!activeDemandIds.current.has(id)) return;
       setDemandStates((current) => ({
         ...current,
         [symbol]: {
